@@ -1,9 +1,40 @@
 import React from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, ShoppingCart, AlertCircle } from 'lucide-react';
+import toast from 'react-hot-toast';
 
-export default function ProductCard({ product }) {
+export default function ProductCard({ product, onAdd, cart = [] }) {
   
-  // Función para elegir el color del badge
+  // 1. LÓGICA DE INVENTARIO
+  // Buscamos cuántas unidades de este producto tiene YA el cliente en su carrito
+  const cartItem = cart.find(item => item.id === product.id);
+  const currentQty = cartItem ? cartItem.quantity : 0;
+  
+  // Definimos estados basados en el stock (asegurando que sea número con || 0)
+  const stock = product.stock || 0;
+  const isOutOfStock = stock <= 0;
+  const isLowStock = stock > 0 && stock < 5;
+  const canAdd = currentQty < stock;
+
+  // 2. FUNCIÓN DE AGREGAR (Compra Rápida)
+  const handleQuickAdd = (e) => {
+    e.preventDefault(); // Evita que el Link padre nos lleve a la página de detalle
+    e.stopPropagation(); // Detiene el clic aquí
+
+    if (isOutOfStock) return;
+
+    if (canAdd) {
+      onAdd(product);
+      if (stock - currentQty === 1) {
+         toast("¡Te llevas la última unidad!", { icon: '📦' });
+      } else {
+         toast.success("Agregado al carrito");
+      }
+    } else {
+      toast.error(`¡Lo sentimos! Solo quedan ${stock} unidades.`);
+    }
+  };
+
+  // 3. FUNCIÓN DE COLOR DE BADGE (Tu diseño original)
   const getBadgeColor = (color) => {
     switch(color) {
         case 'red': return 'bg-red-500 text-white shadow-red-500/30';
@@ -15,36 +46,54 @@ export default function ProductCard({ product }) {
   };
 
   return (
-    <div className="bg-white rounded-[2rem] p-4 relative group shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 border border-gray-100 flex flex-col h-full">
+    <div className={`bg-white rounded-[2rem] p-4 relative group shadow-sm transition-all duration-300 border border-gray-100 flex flex-col h-full 
+      ${isOutOfStock ? 'opacity-70 grayscale' : 'hover:shadow-xl hover:-translate-y-1'}
+    `}>
       
-      {/* 1. ETIQUETA (BADGE) FLOTANTE */}
-      {product.badge && (
-        <span className={`absolute top-4 left-4 z-10 px-3 py-1 rounded-full text-[10px] font-bold tracking-wider shadow-lg ${getBadgeColor(product.badge.color)}`}>
+      {/* --- ETIQUETAS FLOTANTES (BADGES) --- */}
+      
+      {/* Caso A: Agotado */}
+      {isOutOfStock && (
+        <span className="absolute top-4 left-4 z-20 px-3 py-1 rounded-full text-[10px] font-bold tracking-wider shadow-lg bg-slate-800 text-white rotate-[-5deg]">
+            AGOTADO
+        </span>
+      )}
+
+      {/* Caso B: Pocas Unidades (Prioridad sobre marketing) */}
+      {!isOutOfStock && isLowStock && (
+        <span className="absolute top-4 left-4 z-20 px-3 py-1 rounded-full text-[10px] font-bold tracking-wider shadow-lg bg-red-100 text-red-600 flex items-center gap-1 animate-pulse border border-red-200">
+            <AlertCircle size={10} /> ¡Quedan {stock}!
+        </span>
+      )}
+
+      {/* Caso C: Badge de Marketing (Solo si hay stock normal) */}
+      {!isOutOfStock && !isLowStock && product.badge && (
+        <span className={`absolute top-4 left-4 z-20 px-3 py-1 rounded-full text-[10px] font-bold tracking-wider shadow-lg ${getBadgeColor(product.badge.color)}`}>
             {product.badge.text}
         </span>
       )}
 
-      {/* 2. IMAGEN CON ZOOM Y LAZY LOADING */}
+      {/* --- IMAGEN CON ZOOM --- */}
       <div className="h-40 w-full mb-4 flex items-center justify-center p-2 relative overflow-visible">
-         {/* Círculo decorativo de fondo */}
+         {/* Círculo decorativo */}
          <div className="absolute w-28 h-28 bg-gray-50 rounded-full blur-xl group-hover:bg-blue-50 transition-colors duration-500"></div>
          
          <img 
-            src={product.image} 
-            alt={product.name}
-            loading="lazy" // <--- Optimización de velocidad
-            className="w-full h-full object-contain drop-shadow-sm group-hover:scale-110 group-hover:rotate-2 transition-transform duration-500 ease-out mix-blend-multiply relative z-10"
+           src={product.image} 
+           alt={product.name}
+           loading="lazy"
+           className="w-full h-full object-contain drop-shadow-sm group-hover:scale-110 group-hover:rotate-2 transition-transform duration-500 ease-out mix-blend-multiply relative z-10"
          />
       </div>
 
-      {/* 3. INFORMACIÓN */}
+      {/* --- INFORMACIÓN --- */}
       <div className="flex-1 flex flex-col">
           <p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">{product.category}</p>
           <h3 className="font-bold text-slate-900 leading-tight mb-2 line-clamp-2 text-[15px]">{product.name}</h3>
           
-          <div className="mt-auto flex items-end justify-between gap-2">
+          <div className="mt-auto flex items-end justify-between gap-2 border-t border-gray-50 pt-3">
             <div>
-                {/* Precio Anterior (Tachado) si existe */}
+                {/* Precio Anterior (si existe) */}
                 {product.oldPrice && (
                     <span className="block text-xs text-gray-400 line-through decoration-red-400 decoration-2">
                         R$ {product.oldPrice.toFixed(2)}
@@ -55,10 +104,22 @@ export default function ProductCard({ product }) {
                 </span>
             </div>
 
-            {/* Botón "+" meramente visual (la acción la hace el Link padre en Home) */}
-            <div className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-colors duration-300 shadow-sm">
-                <Plus size={18} strokeWidth={3} />
-            </div>
+            {/* BOTÓN DE ACCIÓN RÁPIDA */}
+            <button 
+                onClick={handleQuickAdd}
+                disabled={isOutOfStock || !canAdd}
+                className={`w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300 shadow-sm
+                    ${isOutOfStock 
+                        ? 'bg-gray-100 text-gray-300 cursor-not-allowed' 
+                        : !canAdd
+                            ? 'bg-orange-100 text-orange-400 cursor-not-allowed' // Lleno
+                            : 'bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white hover:scale-110 shadow-blue-200'
+                    }
+                `}
+                title={isOutOfStock ? "Agotado" : !canAdd ? "Stock máximo alcanzado" : "Agregar rápido"}
+            >
+                {isOutOfStock ? <ShoppingCart size={18} className="line-through opacity-50"/> : <Plus size={20} strokeWidth={3} />}
+            </button>
           </div>
       </div>
     </div>

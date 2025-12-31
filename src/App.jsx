@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import toast, { Toaster } from 'react-hot-toast'; // Librería profesional de notificaciones
 
 // Importación de Páginas
 import Home from "./pages/Home";
@@ -12,9 +13,6 @@ import NotFound from "./pages/NotFound";
 import AdminDashboard from "./pages/AdminDashboard";
 import AdminLogin from './pages/AdminLogin';
 
-// Importación de Componentes
-import Toast from "./components/Toast";
-
 function App() {
   // 1. Estado del Carrito (Inicializado desde LocalStorage)
   const [cart, setCart] = useState(() => {
@@ -22,92 +20,117 @@ function App() {
     return savedCart ? JSON.parse(savedCart) : [];
   });
 
-  // 2. Estado de la Notificación (Toast)
-  const [toast, setToast] = useState(null);
-
-  // 3. Persistencia: Guardar cambios automáticamente
+  // 2. Persistencia: Guardar cambios automáticamente
   useEffect(() => {
     localStorage.setItem("venefoods_cart", JSON.stringify(cart));
   }, [cart]);
 
-  // --- FUNCIONES AUXILIARES ---
-
-  // Definición de showToast (Faltaba en tu código anterior)
-  const showToast = (message, type = "success") => {
-    setToast({ message, type });
-  };
-
   // --- LÓGICA DEL CARRITO ---
 
-  // Agregar producto
+  // Agregar producto (Corrección: Suma cantidad en vez de duplicar)
   const addToCart = (product) => {
-    setCart((prev) => [...prev, product]);
-    
-    // Vibración para móviles (Feedback táctil)
-    if (navigator.vibrate) navigator.vibrate(50);
+    setCart((prevCart) => {
+      // A. Buscamos si ya existe
+      const existingItem = prevCart.find((item) => item.id === product.id);
 
-    // Feedback visual
-    showToast(`Se agregó ${product.name}`, "success");
+      // B. Verificamos Stock (Opcional, protección extra)
+      const stock = product.stock || 0; 
+      // Si existe y ya tienes el máximo, no deja agregar (excepto si stock es 0 que lo maneja la UI)
+      if (existingItem && stock > 0 && existingItem.quantity >= stock) {
+         toast.error(`¡Solo quedan ${stock} unidades!`);
+         return prevCart;
+      }
+
+      if (existingItem) {
+        // C. Si existe, actualizamos la cantidad
+        return prevCart.map((item) =>
+          item.id === product.id
+            ? { ...item, quantity: (item.quantity || 1) + 1 }
+            : item
+        );
+      } else {
+        // D. Si no existe, lo agregamos con cantidad 1
+        return [...prevCart, { ...product, quantity: 1 }];
+      }
+    });
+    toast.success("Agregado al carrito");
   };
 
-  // Quitar un solo item (disminuir cantidad)
-  const removeFromCart = (productId) => {
-    setCart((prev) => {
-      const index = prev.findIndex((item) => item.id === productId);
-      if (index !== -1) {
-        const newCart = [...prev];
-        newCart.splice(index, 1);
-        return newCart;
+  const removeFromCart = (product) => {
+    setCart((prevCart) => {
+      const existingItem = prevCart.find((item) => item.id === product.id);
+
+      // Si la cantidad es 1, lo eliminamos del todo
+      if (existingItem?.quantity === 1) {
+        return prevCart.filter((item) => item.id !== product.id);
       }
-      return prev;
+
+      // Si es mayor a 1, restamos una unidad
+      return prevCart.map((item) =>
+        item.id === product.id
+          ? { ...item, quantity: item.quantity - 1 }
+          : item
+      );
     });
   };
 
   // Eliminar producto completo (papelera)
   const deleteFromCart = (productId) => {
     setCart((prev) => prev.filter((item) => item.id !== productId));
-    showToast("Producto eliminado", "error");
+    toast.success("Producto eliminado");
   };
 
-  // Objeto de props para pasar limpio al Home
-  const cartProps = {
-    cart,
-    addToCart,
-    removeFromCart,
-    deleteFromCart,
+  // Vaciar carrito (después de comprar)
+  const clearCart = () => {
+    setCart([]);
   };
 
   return (
     <BrowserRouter>
-      {/* Componente de Notificación Flotante */}
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      )}
+      {/* Componente visual de las notificaciones */}
+      <Toaster position="top-center" reverseOrder={false} />
 
-      {/* Rutas de la Aplicación */}
       <Routes>
         {/* Principal */}
-        <Route path="/" element={<Home {...cartProps} />} />
-        
+        <Route 
+            path="/" 
+            element={
+                <Home 
+                    cart={cart} 
+                    addToCart={addToCart} 
+                    removeFromCart={removeFromCart} 
+                    deleteFromCart={deleteFromCart} 
+                />
+            } 
+        />
+
         {/* Detalle */}
         <Route
           path="/product/:id"
           element={<ProductDetail cart={cart} addToCart={addToCart} />}
         />
-        
-        {/* Finalizar Compra */}
-        <Route path="/checkout" element={<Checkout cart={cart} />} />
 
-        {/* Páginas Informativas */}
+        {/* Finalizar Compra (Con props corregidas para editar cantidad) */}
+        <Route
+          path="/checkout"
+          element={
+            <Checkout
+              cart={cart}
+              addToCart={addToCart}       // Necesario para botón +
+              removeFromCart={removeFromCart} // Necesario para botón -
+              clearCart={clearCart}
+            />
+          }
+        />
+
+        {/* Páginas Informativas y Admin */}
         <Route path="/about" element={<About cart={cart} />} />
         <Route path="/contact" element={<Contact cart={cart} />} />
         <Route path="/curiosities" element={<Curiosities cart={cart} />} />
+        
         <Route path="/admin" element={<AdminLogin />} />
         <Route path="/admin/dashboard" element={<AdminDashboard />} />
+        
         <Route path="*" element={<NotFound cart={cart} />} />
       </Routes>
     </BrowserRouter>
