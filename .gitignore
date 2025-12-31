@@ -1,0 +1,10 @@
+# Dependencias (Gigante, no subir)
+node_modules
+
+# Archivos de entorno (Claves secretas, no subir)
+.env
+
+# Archivos de compilación (Se generan solos)
+dist
+build
+.DS_Store
