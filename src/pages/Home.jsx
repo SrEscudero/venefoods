@@ -7,11 +7,13 @@ import ProductCard from "../components/ProductCard";
 import CartSummary from "../components/CartSummary";
 import CartModal from "../components/CartModal";
 import Footer from "../components/Footer";
+import StoreClosedBanner from "../components/StoreClosedBanner"; // NUEVO COMPONENTE
 import { CATEGORIAS } from "../data/products";
 import { supabase } from "../supabase/client";
+import { useStoreSettings } from "../hooks/useStoreSettings"; // NUEVO HOOK
 
 // Imagen por defecto (puedes cambiar esta URL por una local si prefieres)
-const DEFAULT_BANNER = "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?q=80&w=1920&auto=format&fit=crop";
+const DEFAULT_BANNER = "";
 
 export default function Home({
   cart,
@@ -26,31 +28,20 @@ export default function Home({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
   
-  // Estado del Banner (Empieza con el default, luego carga el de Supabase)
-  const [bannerUrl, setBannerUrl] = useState(DEFAULT_BANNER);
+  // Usamos el Hook Centralizado de Configuración
+  const { storeStatus, closedMessage, bannerUrl } = useStoreSettings();
 
-  // --- 1. CARGA DE DATOS (PRODUCTOS + BANNER) ---
+  // --- 1. CARGA DE DATOS (PRODUCTOS) ---
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
 
-        // A. Cargar Configuración del Banner (Nuevo)
-        const { data: bannerSetting } = await supabase
-          .from('site_settings')
-          .select('value')
-          .eq('key', 'home_banner')
-          .single();
-
-        if (bannerSetting && bannerSetting.value) {
-            setBannerUrl(bannerSetting.value);
-        }
-
-        // B. Cargar Productos
+        // Cargar Productos
         const { data, error } = await supabase.from('products').select('*');
         
         if (error) {
-            console.error("Error cargando productos:", error);
+          console.error("Error cargando productos:", error);
         } else {
           // TRUCO: Convertimos PRECIO a Número aquí para evitar el NaN
           const formattedData = data.map(item => ({
@@ -104,7 +95,7 @@ export default function Home({
 
       <Navbar cartCount={totalItems} onSearch={setSearchTerm} />
 
-      <main className="max-w-7xl mx-auto px-4 lg:px-8 pt-6 space-y-8 flex-1 w-full">
+      <main className="max-w-7xl mx-auto px-4 lg:px-8 pt-6 space-y-8 flex-1 w-full relative">
         
         {/* Banner (Visible si no buscas nada) */}
         {searchTerm === "" && (
@@ -112,7 +103,7 @@ export default function Home({
             <section className="relative overflow-hidden rounded-[2.5rem] text-white p-8 md:p-16 shadow-2xl shadow-blue-900/20 text-center md:text-left animate-fade-in min-h-[380px] flex items-center group">
               <div className="absolute inset-0 z-0">
                 <img 
-                    src={bannerUrl} 
+                    src={bannerUrl || DEFAULT_BANNER} 
                     alt="Banner Promocional" 
                     className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105"
                 />
@@ -122,8 +113,8 @@ export default function Home({
 
               <div className="relative z-10 max-w-3xl">
                 <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-yellow-400 text-slate-900 rounded-full text-xs font-extrabold uppercase tracking-wider mb-6 shadow-lg shadow-yellow-400/20">
-                  <span>Desde Venezuela</span><span className="fi fi-ve rounded-[2px]"></span>
-                  <span>Para Brasil</span><span className="fi fi-br rounded-[2px]"></span>
+                  <span>{storeStatus === 'open' ? '¡Estamos Abiertos!' : 'Cerrado Temporalmente'}</span>
+                  {storeStatus === 'open' && <span className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></span>}
                 </div>
                 <h2 className="text-4xl md:text-6xl font-black leading-tight mb-4 drop-shadow-lg">
                   Más que productos, <br /> entregamos <span className="text-yellow-400">recuerdos.</span>
@@ -183,7 +174,7 @@ export default function Home({
             <p className="font-medium">Trayendo sabor venezolano...</p>
           </div>
         ) : filteredProducts.length > 0 ? (
-          <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6 lg:gap-8 pb-20 animate-fade-in-up">
+          <section className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6 lg:gap-8 pb-20 animate-fade-in-up ${storeStatus === 'closed' ? 'opacity-50 grayscale pointer-events-none select-none' : ''}`}>
             {filteredProducts.map((product) => (
               <Link to={`/product/${product.id}`} key={product.id} className="cursor-pointer block">
                 <ProductCard
@@ -206,6 +197,7 @@ export default function Home({
 
       <Footer />
       
+      {/* Botón Volver Arriba */}
       <button
         onClick={scrollToTop}
         className={`fixed bottom-24 right-4 z-30 p-3 bg-white text-slate-800 rounded-full shadow-lg border border-gray-100 transition-all duration-300 hover:bg-slate-50 active:scale-90 ${
@@ -216,11 +208,17 @@ export default function Home({
       </button>
       
       {/* Resumen del Carrito y Modal */}
-      <CartSummary
-        count={totalItems}
-        total={totalPrice}
-        onClick={() => setIsModalOpen(true)}
-      />
+      {storeStatus === 'open' && (
+          <CartSummary
+            count={totalItems}
+            total={totalPrice}
+            onClick={() => setIsModalOpen(true)}
+          />
+      )}
+
+      {/* AVISO DE CIERRE (Solo si está cerrada) */}
+      {storeStatus === 'closed' && <StoreClosedBanner message={closedMessage} />}
+
       <CartModal
         cart={cart}
         isOpen={isModalOpen}
@@ -228,6 +226,7 @@ export default function Home({
         onAdd={addToCart}
         onRemove={removeFromCart}
         onDelete={deleteFromCart}
+        storeStatus={storeStatus} // Pasamos estado para bloquear checkout
       />
     </div>
   );

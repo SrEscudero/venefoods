@@ -75,7 +75,7 @@ export default function About({ cart }) {
             <section className="bg-white rounded-[2.5rem] p-8 md:p-12 shadow-sm border border-gray-100 mb-16">
                 <div className="flex flex-col md:flex-row gap-12 items-center">
                     <div className="w-full md:w-1/2">
-                        <h2 className="text-3xl font-bold text-slate-900 mb-6">Nuestra Historia 📖</h2>
+                        <h2 className="text-3xl font-bold text-slate-900 mb-6">Nuestra Historia</h2>
                         <div className="space-y-4 text-gray-600 text-lg leading-relaxed">
                             <p>
                                 Todo comenzó con un antojo. Al llegar a <strong>Passo Fundo</strong>, buscábamos desesperadamente esa Harina P.A.N. para el desayuno o ese Chocolate Savoy para la tarde.
@@ -108,7 +108,7 @@ export default function About({ cart }) {
 
             {/* 4. GALERÍA DE MOMENTOS (Espacios para imágenes) */}
             <section className="text-center mb-16">
-                <h2 className="text-3xl font-bold text-slate-900 mb-2">Momentos Venefoods 📸</h2>
+                <h2 className="text-3xl font-bold text-slate-900 mb-2">Momentos Venefoods</h2>
                 <p className="text-gray-500 mb-8">Un vistazo a nuestro local y nuestros productos</p>
                 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

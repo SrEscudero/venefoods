@@ -8,6 +8,7 @@ import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 import { supabase } from '../supabase/client';
 import toast from 'react-hot-toast';
+import { Helmet } from 'react-helmet-async'; // SEO Importante
 
 export default function ProductDetail({ cart, addToCart }) {
   const { id } = useParams();
@@ -37,9 +38,11 @@ export default function ProductDetail({ cart, addToCart }) {
           return;
         }
 
-        // Formatear el badge
+        // Formatear el badge y asegurar tipos numéricos
         const formattedProduct = {
             ...currentProduct,
+            price: parseFloat(currentProduct.price),
+            stock: parseInt(currentProduct.stock),
             badge: currentProduct.badge_text ? { text: currentProduct.badge_text, color: currentProduct.badge_color } : null
         };
         
@@ -53,7 +56,12 @@ export default function ProductDetail({ cart, addToCart }) {
           .neq('id', id)
           .limit(4);
 
-        if (relatedData) setRelatedProducts(relatedData);
+        if (relatedData) {
+            setRelatedProducts(relatedData.map(p => ({
+                ...p,
+                price: parseFloat(p.price)
+            })));
+        }
 
       } catch (error) {
         console.error("Error general:", error);
@@ -84,23 +92,17 @@ export default function ProductDetail({ cart, addToCart }) {
   // --- 3. HANDLERS ---
 
   const handleAdd = () => {
+    // 1. Validación de seguridad (Doble check)
     if (qtyToAdd > availableStock) {
-      toast.error(`Solo quedan ${availableStock} unidades disponibles`);
+      toast.error(`Solo puedes agregar ${availableStock} unidades más.`);
       return;
     }
 
-    // Agregamos la cantidad seleccionada
-    // Como addToCart agrega de 1 en 1, hacemos un bucle rápido
-    for(let i=0; i<qtyToAdd; i++) {
-        addToCart(product);
-    }
+    addToCart(product, qtyToAdd);
     
-    // Opcional: Feedback extra si vació el stock
     if (availableStock - qtyToAdd === 0) {
-        toast("¡Te llevaste lo último!", { icon: '📦' });
     }
     
-    // Reiniciamos el contador a 1 (o 0 si ya no hay stock)
     setQtyToAdd(1);
   };
 
@@ -111,7 +113,7 @@ export default function ProductDetail({ cart, addToCart }) {
   if (loading) {
     return (
         <div className="min-h-screen flex flex-col bg-[#F2F2F7]">
-            <Navbar cartCount={cart.length} isDetailPage={true} />
+            <Navbar cartCount={cart.reduce((a, c) => a + c.quantity, 0)} isDetailPage={true} />
             <div className="flex-1 flex items-center justify-center">
                 <Loader2 size={40} className="animate-spin text-blue-600" />
             </div>
@@ -123,7 +125,14 @@ export default function ProductDetail({ cart, addToCart }) {
 
   return (
     <div className="min-h-screen bg-[#F2F2F7] font-sans flex flex-col">
-      <Navbar cartCount={cart.length} isDetailPage={true} />
+      
+      {/* SEO Dinámico */}
+      <Helmet>
+        <title>{product.name} | Venefoods</title>
+        <meta name="description" content={`Compra ${product.name} al mejor precio en Passo Fundo. Envío rápido y seguro.`} />
+      </Helmet>
+
+      <Navbar cartCount={cart.reduce((a, c) => a + c.quantity, 0)} isDetailPage={true} />
 
       <main className="flex-1 max-w-6xl mx-auto md:pt-10 pb-20 w-full animate-fade-in px-4">
         
@@ -132,7 +141,7 @@ export default function ProductDetail({ cart, addToCart }) {
 
           {/* COLUMNA IZQ: IMAGEN */}
           <div className="w-full md:w-1/2 relative bg-white rounded-[2.5rem] overflow-hidden h-[50vh] md:h-[500px] flex items-center justify-center group shadow-sm border border-gray-100">
-             
+              
              {/* Botón flotante volver (móvil) */}
              <button onClick={() => navigate(-1)} className="md:hidden absolute top-4 left-4 bg-white/80 backdrop-blur-md p-3 rounded-full text-slate-800 shadow-sm z-20 active:scale-90 transition">
                 <ArrowLeft size={24} />

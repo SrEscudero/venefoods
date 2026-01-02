@@ -11,7 +11,7 @@ export default function Footer() {
           {/* Columna 1: Info */}
           <div>
             <div className="flex items-center gap-2 mb-4">
-                <span className="text-3xl">🇻🇪</span>
+                <span className="fi fi-ve rounded-sm shadow-sm"></span>
                 <span className="text-xl font-bold tracking-tight">Venefoods</span>
             </div>
             <p className="text-slate-400 text-sm leading-relaxed max-w-xs">

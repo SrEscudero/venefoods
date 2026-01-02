@@ -14,7 +14,7 @@ import AdminDashboard from "./pages/AdminDashboard";
 import AdminLogin from './pages/AdminLogin';
 
 // Importación de Componentes
-import ProtectedRoute from './components/ProtectedRoute'; // <--- ¡NO OLVIDES IMPORTAR ESTO!
+import ProtectedRoute from './components/ProtectedRoute';
 
 function App() {
   const [cart, setCart] = useState(() => {
@@ -26,27 +26,39 @@ function App() {
     localStorage.setItem("venefoods_cart", JSON.stringify(cart));
   }, [cart]);
 
-  // --- LÓGICA DEL CARRITO ---
-  const addToCart = (product) => {
+  // --- LÓGICA DEL CARRITO MEJORADA (SOLUCIÓN ALERTAS MÚLTIPLES) ---
+  // Ahora acepta un segundo parámetro "qty" (cantidad), por defecto es 1.
+  const addToCart = (product, qty = 1) => {
+    let errorOccurred = false;
+
     setCart((prevCart) => {
       const existingItem = prevCart.find((item) => item.id === product.id);
       const stock = product.stock || 0; 
+      const currentQty = existingItem ? existingItem.quantity : 0;
       
-      if (existingItem && stock > 0 && existingItem.quantity >= stock) {
-         toast.error(`¡Solo quedan ${stock} unidades!`);
+      // 1. Validar Stock Total (Lo que ya tengo en carrito + lo que quiero agregar ahora)
+      if (stock > 0 && (currentQty + qty) > stock) {
+         errorOccurred = true; // Marcamos error para avisar fuera del setState
          return prevCart;
       }
 
+      // 2. Si pasa la validación, actualizamos
       if (existingItem) {
         return prevCart.map((item) =>
-          item.id === product.id ? { ...item, quantity: (item.quantity || 1) + 1 } : item
+          item.id === product.id ? { ...item, quantity: item.quantity + qty } : item
         );
       } else {
-        return [...prevCart, { ...product, quantity: 1 }];
+        return [...prevCart, { ...product, quantity: qty }];
       }
     });
-    toast.success("Agregado al carrito");
-  };
+
+    // 3. Mostramos la alerta UNA sola vez
+    if (errorOccurred) {
+      toast.error(`¡Stock insuficiente!`);
+  } else {
+      toast.success(`Agregado al carrito`); 
+  }
+};
 
   const removeFromCart = (product) => {
     setCart((prevCart) => {
@@ -108,7 +120,7 @@ function App() {
         <Route path="/contact" element={<Contact cart={cart} />} />
         <Route path="/curiosities" element={<Curiosities cart={cart} />} />
         
-        {/* Login es público, Dashboard es privado */}
+        {/* Login */}
         <Route path="/admin" element={<AdminLogin />} />
         
         {/* 🔒 ZONA SEGURA 🔒 */}

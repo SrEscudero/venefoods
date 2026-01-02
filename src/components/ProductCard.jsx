@@ -17,22 +17,13 @@ export default function ProductCard({ product, onAdd, cart = [] }) {
 
   // 2. FUNCIÓN DE AGREGAR (Compra Rápida)
   const handleQuickAdd = (e) => {
-    e.preventDefault(); // Evita que el Link padre nos lleve a la página de detalle
-    e.stopPropagation(); // Detiene el clic aquí
+    e.preventDefault(); 
+    e.stopPropagation(); 
 
     if (isOutOfStock) return;
 
-    if (canAdd) {
-      onAdd(product);
-      if (stock - currentQty === 1) {
-         toast("¡Te llevas la última unidad!", { icon: '📦' });
-      } else {
-         toast.success("Agregado al carrito");
-      }
-    } else {
-      toast.error(`¡Lo sentimos! Solo quedan ${stock} unidades.`);
-    }
-  };
+    onAdd(product);
+};
 
   // 3. FUNCIÓN DE COLOR DE BADGE (Tu diseño original)
   const getBadgeColor = (color) => {

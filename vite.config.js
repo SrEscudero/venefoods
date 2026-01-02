@@ -33,4 +33,14 @@ export default defineConfig({
       }
     })
   ],
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: './src/tests/setup.jsx', // Crearemos este archivo ahora
+    css: false,
+  },
+  server: {
+    host: true,
+    port: 5173,
+  }
 })

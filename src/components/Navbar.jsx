@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { Search, ShoppingBag, ArrowLeft } from 'lucide-react';
 import logoVenefoods from '../assets/images/logo.jpg';
 
-export default function Navbar({ cartCount, onSearch, isDetailPage = false }) {
+export default function Navbar({ cartCount, onSearch, isDetailPage }) {
   const location = useLocation();
 
   // Estilos para resaltar el link de la página actual
@@ -48,6 +48,10 @@ export default function Navbar({ cartCount, onSearch, isDetailPage = false }) {
               </div>
             </Link>
           )}
+        </div>
+        
+        <div className="bg-blue-900 text-white text-xs font-bold text-center py-2 px-4 relative z-800 rounded-full hidden sm:inline-block">
+        🚀 Envío GRATIS en Passo Fundo por compras superiores a <span className="text-yellow-400">R$ 100,00</span>
         </div>
 
         {/* 2. ZONA CENTRAL: Navegación (Solo PC/Tablet) */}
