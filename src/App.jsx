@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import toast, { Toaster } from 'react-hot-toast'; // Librería profesional de notificaciones
+import toast, { Toaster } from 'react-hot-toast';
 
 // Importación de Páginas
 import Home from "./pages/Home";
@@ -13,43 +13,35 @@ import NotFound from "./pages/NotFound";
 import AdminDashboard from "./pages/AdminDashboard";
 import AdminLogin from './pages/AdminLogin';
 
+// Importación de Componentes
+import ProtectedRoute from './components/ProtectedRoute'; // <--- ¡NO OLVIDES IMPORTAR ESTO!
+
 function App() {
-  // 1. Estado del Carrito (Inicializado desde LocalStorage)
   const [cart, setCart] = useState(() => {
     const savedCart = localStorage.getItem("venefoods_cart");
     return savedCart ? JSON.parse(savedCart) : [];
   });
 
-  // 2. Persistencia: Guardar cambios automáticamente
   useEffect(() => {
     localStorage.setItem("venefoods_cart", JSON.stringify(cart));
   }, [cart]);
 
   // --- LÓGICA DEL CARRITO ---
-
-  // Agregar producto (Corrección: Suma cantidad en vez de duplicar)
   const addToCart = (product) => {
     setCart((prevCart) => {
-      // A. Buscamos si ya existe
       const existingItem = prevCart.find((item) => item.id === product.id);
-
-      // B. Verificamos Stock (Opcional, protección extra)
       const stock = product.stock || 0; 
-      // Si existe y ya tienes el máximo, no deja agregar (excepto si stock es 0 que lo maneja la UI)
+      
       if (existingItem && stock > 0 && existingItem.quantity >= stock) {
          toast.error(`¡Solo quedan ${stock} unidades!`);
          return prevCart;
       }
 
       if (existingItem) {
-        // C. Si existe, actualizamos la cantidad
         return prevCart.map((item) =>
-          item.id === product.id
-            ? { ...item, quantity: (item.quantity || 1) + 1 }
-            : item
+          item.id === product.id ? { ...item, quantity: (item.quantity || 1) + 1 } : item
         );
       } else {
-        // D. Si no existe, lo agregamos con cantidad 1
         return [...prevCart, { ...product, quantity: 1 }];
       }
     });
@@ -59,39 +51,30 @@ function App() {
   const removeFromCart = (product) => {
     setCart((prevCart) => {
       const existingItem = prevCart.find((item) => item.id === product.id);
-
-      // Si la cantidad es 1, lo eliminamos del todo
       if (existingItem?.quantity === 1) {
         return prevCart.filter((item) => item.id !== product.id);
       }
-
-      // Si es mayor a 1, restamos una unidad
       return prevCart.map((item) =>
-        item.id === product.id
-          ? { ...item, quantity: item.quantity - 1 }
-          : item
+        item.id === product.id ? { ...item, quantity: item.quantity - 1 } : item
       );
     });
   };
 
-  // Eliminar producto completo (papelera)
   const deleteFromCart = (productId) => {
     setCart((prev) => prev.filter((item) => item.id !== productId));
     toast.success("Producto eliminado");
   };
 
-  // Vaciar carrito (después de comprar)
   const clearCart = () => {
     setCart([]);
   };
 
   return (
     <BrowserRouter>
-      {/* Componente visual de las notificaciones */}
       <Toaster position="top-center" reverseOrder={false} />
 
       <Routes>
-        {/* Principal */}
+        {/* Rutas Públicas */}
         <Route 
             path="/" 
             element={
@@ -104,32 +87,34 @@ function App() {
             } 
         />
 
-        {/* Detalle */}
         <Route
           path="/product/:id"
           element={<ProductDetail cart={cart} addToCart={addToCart} />}
         />
 
-        {/* Finalizar Compra (Con props corregidas para editar cantidad) */}
         <Route
           path="/checkout"
           element={
             <Checkout
               cart={cart}
-              addToCart={addToCart}       // Necesario para botón +
-              removeFromCart={removeFromCart} // Necesario para botón -
+              addToCart={addToCart}
+              removeFromCart={removeFromCart}
               clearCart={clearCart}
             />
           }
         />
 
-        {/* Páginas Informativas y Admin */}
         <Route path="/about" element={<About cart={cart} />} />
         <Route path="/contact" element={<Contact cart={cart} />} />
         <Route path="/curiosities" element={<Curiosities cart={cart} />} />
         
+        {/* Login es público, Dashboard es privado */}
         <Route path="/admin" element={<AdminLogin />} />
-        <Route path="/admin/dashboard" element={<AdminDashboard />} />
+        
+        {/* 🔒 ZONA SEGURA 🔒 */}
+        <Route element={<ProtectedRoute />}>
+            <Route path="/admin/dashboard" element={<AdminDashboard />} />
+        </Route>
         
         <Route path="*" element={<NotFound cart={cart} />} />
       </Routes>

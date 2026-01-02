@@ -18,7 +18,6 @@ export default function Checkout({ cart, addToCart, removeFromCart, clearCart })
     name: '', phone: '', cpf: '', cep: '', street: '', number: '', district: '', complement: '', paymentMethod: 'pix'
   });
 
-  // Cálculo seguro del total
   const total = cart.reduce((sum, item) => sum + (Number(item.price) * (item.quantity || 1)), 0);
 
   // --- MÁSCARAS ---
@@ -40,11 +39,12 @@ export default function Checkout({ cart, addToCart, removeFromCart, clearCart })
     if (formData.phone.length < 14) return toast.error("Ingresa un WhatsApp válido");
     
     setIsSubmitting(true);
-    const toastId = toast.loading("Procesando...");
+    const toastId = toast.loading("Procesando pedido...");
 
     try {
         const fullAddress = `${formData.street}, ${formData.number} - ${formData.district} (CEP: ${formData.cep}) ${formData.complement || ''}`;
         
+        // 1. Guardar la Orden en 'orders'
         const orderData = {
             customer_name: formData.name,
             customer_phone: formData.phone,
@@ -56,22 +56,43 @@ export default function Checkout({ cart, addToCart, removeFromCart, clearCart })
             address_district: formData.district,
             address_complement: formData.complement,
             payment_method: formData.paymentMethod,
+            origin: 'web', // Importante para saber que vino de la web
             total: total,
             status: 'pendiente',
             items: cart.map(item => ({
-                id: item.id, 
-                name: item.name, 
-                price: Number(item.price), 
-                quantity: item.quantity || 1
+                id: item.id, name: item.name, price: Number(item.price), quantity: item.quantity || 1
             }))
         };
 
-        const { error } = await supabase.from('orders').insert([orderData]);
-        if (error) throw error;
+        const { error: orderError } = await supabase.from('orders').insert([orderData]);
+        if (orderError) throw orderError;
 
-        toast.success("¡Pedido Enviado!", { id: toastId });
+        // 2. --- ACTUALIZAR STOCK (La parte que faltaba) ---
+        // Recorremos cada producto del carrito para restar su cantidad en la base de datos
+        for (const item of cart) {
+            // A. Primero consultamos el stock actual en la DB (para no confiar ciegamente en el local)
+            const { data: productData } = await supabase
+                .from('products')
+                .select('stock')
+                .eq('id', item.id)
+                .single();
 
-        // WhatsApp
+            if (productData) {
+                // B. Calculamos el nuevo stock (asegurando que no baje de 0)
+                const qtyToSubtract = item.quantity || 1;
+                const newStock = Math.max(0, productData.stock - qtyToSubtract);
+
+                // C. Actualizamos la tabla products
+                await supabase
+                    .from('products')
+                    .update({ stock: newStock })
+                    .eq('id', item.id);
+            }
+        }
+
+        toast.success("¡Pedido Enviado y Stock Actualizado!", { id: toastId });
+
+        // 3. WhatsApp
         const PHONE_NUMBER = "5554993294396"; 
         let message = `*NUEVO PEDIDO WEB 🇻🇪*\n--------------------------------\n`;
         message += `👤 *Cliente:* ${formData.name}\n📱 *Tel:* ${formData.phone}\n📍 *Entrega:* ${fullAddress}\n💰 *Pago:* ${formData.paymentMethod.toUpperCase()}\n`;
@@ -91,7 +112,7 @@ export default function Checkout({ cart, addToCart, removeFromCart, clearCart })
 
     } catch (error) {
         console.error(error);
-        toast.error("Error al registrar.", { id: toastId });
+        toast.error("Error al registrar: " + error.message, { id: toastId });
     } finally {
         setIsSubmitting(false);
     }
@@ -154,14 +175,13 @@ export default function Checkout({ cart, addToCart, removeFromCart, clearCart })
                 </div>
             </div>
 
-            {/* COLUMNA DERECHA: RESUMEN DEL PEDIDO */}
+            {/* COLUMNA DERECHA: RESUMEN */}
             <div className="lg:col-span-5 space-y-6">
                 <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
                     <ShoppingBag className="text-blue-600" /> Resumen del Pedido
                 </h1>
                 
                 <div className="bg-white p-6 rounded-3xl shadow-lg border border-gray-100 sticky top-24">
-                    {/* LISTA DE PRODUCTOS */}
                     <div className="space-y-4 mb-6 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
                         {cart.map((item) => (
                             <div key={item.id} className="flex gap-4 items-center bg-gray-50 p-3 rounded-xl border border-gray-100">
@@ -174,23 +194,12 @@ export default function Checkout({ cart, addToCart, removeFromCart, clearCart })
                                     <p className="text-blue-600 font-bold text-xs mt-1">R$ {Number(item.price).toFixed(2)}</p>
                                 </div>
                                 
-                                {/* CONTROLES DE CANTIDAD (Ahora sí funcionan) */}
                                 <div className="flex items-center gap-2 bg-white rounded-lg px-1 py-1 shadow-sm border border-gray-200">
-                                    <button 
-                                        type="button" 
-                                        onClick={() => removeFromCart(item)} // Usa la función corregida de App.jsx
-                                        className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
-                                    >
+                                    <button type="button" onClick={() => removeFromCart(item)} className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors">
                                         {item.quantity > 1 ? <Minus size={14}/> : <Trash2 size={14}/>}
                                     </button>
-                                    
                                     <span className="text-sm font-bold w-4 text-center text-slate-800">{item.quantity}</span>
-                                    
-                                    <button 
-                                        type="button" 
-                                        onClick={() => addToCart(item)} // Usa la función corregida de App.jsx
-                                        className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
-                                    >
+                                    <button type="button" onClick={() => addToCart(item)} className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors">
                                         <Plus size={14}/>
                                     </button>
                                 </div>

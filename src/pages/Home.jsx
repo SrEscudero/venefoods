@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { ArrowUp, Truck, ShieldCheck, Star, Loader2 } from "lucide-react";
+import { ArrowUp, Truck, ShieldCheck, Star, Loader2, Search } from "lucide-react";
+import { Helmet } from 'react-helmet-async'; // Importamos SEO
 import Navbar from "../components/Navbar";
 import ProductCard from "../components/ProductCard";
 import CartSummary from "../components/CartSummary";
@@ -8,6 +9,9 @@ import CartModal from "../components/CartModal";
 import Footer from "../components/Footer";
 import { CATEGORIAS } from "../data/products";
 import { supabase } from "../supabase/client";
+
+// Imagen por defecto (puedes cambiar esta URL por una local si prefieres)
+const DEFAULT_BANNER = "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?q=80&w=1920&auto=format&fit=crop";
 
 export default function Home({
   cart,
@@ -21,24 +25,38 @@ export default function Home({
   const [searchTerm, setSearchTerm] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
+  
+  // Estado del Banner (Empieza con el default, luego carga el de Supabase)
+  const [bannerUrl, setBannerUrl] = useState(DEFAULT_BANNER);
 
-  // URL del Banner
-  const bannerImage = "src/assets/images/banner-venezuela.jpg";
-
-  // --- 1. CARGA DE PRODUCTOS CORREGIDA (SOLUCIÓN NaN) ---
+  // --- 1. CARGA DE DATOS (PRODUCTOS + BANNER) ---
   useEffect(() => {
-    const fetchProducts = async () => {
+    const fetchData = async () => {
       try {
         setLoading(true);
+
+        // A. Cargar Configuración del Banner (Nuevo)
+        const { data: bannerSetting } = await supabase
+          .from('site_settings')
+          .select('value')
+          .eq('key', 'home_banner')
+          .single();
+
+        if (bannerSetting && bannerSetting.value) {
+            setBannerUrl(bannerSetting.value);
+        }
+
+        // B. Cargar Productos
         const { data, error } = await supabase.from('products').select('*');
         
         if (error) {
             console.error("Error cargando productos:", error);
         } else {
-          // TRUCO: Convertimos PRECIO a Número aquí para evitar el NaN en el carrito
+          // TRUCO: Convertimos PRECIO a Número aquí para evitar el NaN
           const formattedData = data.map(item => ({
             ...item,
             price: parseFloat(item.price), // <--- CLAVE: Forzamos que sea número
+            stock: parseInt(item.stock),   // <--- CLAVE: Stock como entero
             badge: item.badge_text ? { text: item.badge_text, color: item.badge_color } : null
           }));
           setProducts(formattedData);
@@ -50,7 +68,7 @@ export default function Home({
       }
     };
 
-    fetchProducts();
+    fetchData();
   }, []);
 
   // --- 2. LÓGICA SCROLL ---
@@ -65,7 +83,7 @@ export default function Home({
   // --- 3. CÁLCULO DE TOTAL CORREGIDO ---
   const totalItems = cart.reduce((sum, item) => sum + (item.quantity || 1), 0);
   
-  // Aquí estaba el error del NaN: ahora multiplicamos por cantidad y aseguramos que sea número
+  // Solución definitiva al NaN:
   const totalPrice = cart.reduce((sum, item) => sum + (Number(item.price) * (item.quantity || 1)), 0);
 
   // Filtros
@@ -76,19 +94,30 @@ export default function Home({
   });
 
   return (
-    <div className="min-h-screen bg-[#F2F2F7] font-sans transition-colors duration-300">
+    <div className="min-h-screen bg-[#F2F2F7] font-sans transition-colors duration-300 flex flex-col">
+      
+      {/* SEO: Metadata dinámica para Google */}
+      <Helmet>
+        <title>Inicio | Venefoods - Sabor Venezolano en Passo Fundo</title>
+        <meta name="description" content="Encuentra Harina P.A.N., Queso Llanero, Dulces y lo mejor de la gastronomía venezolana en Brasil. Envíos rápidos en Passo Fundo." />
+      </Helmet>
+
       <Navbar cartCount={totalItems} onSearch={setSearchTerm} />
 
-      <main className="max-w-7xl mx-auto px-4 lg:px-8 pt-6 space-y-8">
+      <main className="max-w-7xl mx-auto px-4 lg:px-8 pt-6 space-y-8 flex-1 w-full">
         
         {/* Banner (Visible si no buscas nada) */}
         {searchTerm === "" && (
           <div className="space-y-6">
-            <section className="relative overflow-hidden rounded-[2.5rem] text-white p-8 md:p-16 shadow-2xl shadow-blue-900/20 text-center md:text-left animate-fade-in min-h-[380px] flex items-center">
+            <section className="relative overflow-hidden rounded-[2.5rem] text-white p-8 md:p-16 shadow-2xl shadow-blue-900/20 text-center md:text-left animate-fade-in min-h-[380px] flex items-center group">
               <div className="absolute inset-0 z-0">
-                <img src={bannerImage} alt="Paisaje Venezuela" className="w-full h-full object-cover"/>
-                <div className="absolute inset-0 bg-gradient-to-r from-slate-900 via-blue-900/80 to-blue-900/30 mix-blend-multiply"></div>
-                <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-80"></div>
+                <img 
+                    src={bannerUrl} 
+                    alt="Banner Promocional" 
+                    className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105"
+                />
+                <div className="absolute inset-0 bg-gradient-to-r from-slate-900 via-blue-900/60 to-transparent mix-blend-multiply"></div>
+                <div className="absolute inset-0 bg-black/20"></div>
               </div>
 
               <div className="relative z-10 max-w-3xl">
@@ -96,17 +125,17 @@ export default function Home({
                   <span>Desde Venezuela</span><span className="fi fi-ve rounded-[2px]"></span>
                   <span>Para Brasil</span><span className="fi fi-br rounded-[2px]"></span>
                 </div>
-                <h2 className="text-4xl md:text-6xl font-bold leading-tight mb-4 drop-shadow-lg">
+                <h2 className="text-4xl md:text-6xl font-black leading-tight mb-4 drop-shadow-lg">
                   Más que productos, <br /> entregamos <span className="text-yellow-400">recuerdos.</span>
                 </h2>
-                <p className="text-blue-100 text-lg md:text-xl mb-8 opacity-95 max-w-xl font-medium leading-relaxed drop-shadow-md">
-                  Encuentra gran variedad de productos de nuestra amada tierra a un excelente precio.
+                <p className="text-blue-50 text-lg md:text-xl mb-8 opacity-95 max-w-xl font-medium leading-relaxed drop-shadow-md">
+                  Encuentra la mayor variedad de productos de nuestra amada tierra a un excelente precio.
                 </p>
                 <button
                   onClick={() => document.getElementById("categorias").scrollIntoView({ behavior: "smooth" })}
-                  className="bg-white text-blue-900 px-8 py-3 rounded-xl font-bold shadow-lg hover:bg-yellow-400 hover:text-slate-900 transition-all transform hover:scale-105"
+                  className="bg-white text-blue-900 px-8 py-3 rounded-xl font-bold shadow-lg hover:bg-yellow-400 hover:text-slate-900 transition-all transform hover:scale-105 flex items-center gap-2 mx-auto md:mx-0"
                 >
-                  Ver Catálogo
+                  Ver Catálogo <Search size={18}/>
                 </button>
               </div>
             </section>
@@ -161,7 +190,7 @@ export default function Home({
                   key={product.id}
                   product={product}
                   onAdd={addToCart}
-                  cart={cart}
+                  cart={cart} // <--- Pasamos el carrito para controlar stock
                 />
               </Link>
             ))}
@@ -170,6 +199,7 @@ export default function Home({
           <div className="text-center py-20 opacity-60">
             <span className="text-6xl block mb-4">🔍</span>
             <p className="text-xl font-bold text-slate-800">No encontramos ese producto</p>
+            <button onClick={() => {setSearchTerm(''); setActiveCategory('todo')}} className="mt-4 text-blue-600 font-bold hover:underline">Ver todo el catálogo</button>
           </div>
         )}
       </main>
