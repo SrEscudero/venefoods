@@ -1,42 +1,101 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+/* ============================================
+   GLOBAL UTILITIES - VENEFOODS
+   Estilos complementarios a Tailwind
+   ============================================ */
+
+/* Smooth scrolling para toda la aplicación */
+html {
+  scroll-behavior: smooth;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+/* Personalización de la selección de texto */
+::selection {
+  background-color: rgba(59, 130, 246, 0.2); /* blue-500 con opacidad */
+  color: #1e293b; /* slate-800 */
 }
 
-@keyframes logo-spin {
+/* Firefox */
+::-moz-selection {
+  background-color: rgba(59, 130, 246, 0.2);
+  color: #1e293b;
+}
+
+/* Ocultar scrollbars pero mantener funcionalidad */
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Animación sutil de rebote para badges */
+@keyframes bounce-subtle {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+.animate-bounce-subtle {
+  animation: bounce-subtle 2s infinite;
+}
+
+/* Animación de slide-up (entrada desde abajo) */
+@keyframes slideUp {
   from {
-    transform: rotate(0deg);
+    opacity: 0;
+    transform: translateY(20px);
   }
   to {
-    transform: rotate(360deg);
+    opacity: 1;
+    transform: translateY(0);
   }
 }
-
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+.animate-slide-up {
+  animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
-.card {
-  padding: 2em;
+/* Animación de fade-in */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-fade-in {
+  animation: fadeIn 0.5s ease-out forwards;
 }
 
-.read-the-docs {
-  color: #888;
+/* Animación de fade-in con retardo */
+.animate-fade-in-delayed {
+  animation: fadeIn 0.6s ease-out 0.2s forwards;
+  opacity: 0;
+}
+
+/* Efecto glassmorphism por defecto (puedes usar las clases de Tailwind) */
+.glass {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.glass-dark {
+  background: rgba(15, 23, 42, 0.8); /* slate-900 */
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Scrollbar personalizada (sutil, estilo macOS) */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.3); /* slate-500 */
+  border-radius: 20px;
+  transition: background 0.2s;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(71, 85, 105, 0.5); /* slate-600 */
 }

@@ -26,23 +26,19 @@ function App() {
     localStorage.setItem("venefoods_cart", JSON.stringify(cart));
   }, [cart]);
 
-  // --- LÓGICA DEL CARRITO MEJORADA (SOLUCIÓN ALERTAS MÚLTIPLES) ---
-  // Ahora acepta un segundo parámetro "qty" (cantidad), por defecto es 1.
   const addToCart = (product, qty = 1) => {
     let errorOccurred = false;
 
     setCart((prevCart) => {
       const existingItem = prevCart.find((item) => item.id === product.id);
-      const stock = product.stock || 0; 
+      const stock = product.stock || 0;
       const currentQty = existingItem ? existingItem.quantity : 0;
-      
-      // 1. Validar Stock Total (Lo que ya tengo en carrito + lo que quiero agregar ahora)
+
       if (stock > 0 && (currentQty + qty) > stock) {
-         errorOccurred = true; // Marcamos error para avisar fuera del setState
-         return prevCart;
+        errorOccurred = true;
+        return prevCart;
       }
 
-      // 2. Si pasa la validación, actualizamos
       if (existingItem) {
         return prevCart.map((item) =>
           item.id === product.id ? { ...item, quantity: item.quantity + qty } : item
@@ -52,13 +48,12 @@ function App() {
       }
     });
 
-    // 3. Mostramos la alerta UNA sola vez
     if (errorOccurred) {
       toast.error(`¡Stock insuficiente!`);
-  } else {
-      toast.success(`Agregado al carrito`); 
-  }
-};
+    } else {
+      toast.success(`Agregado al carrito`);
+    }
+  };
 
   const removeFromCart = (product) => {
     setCart((prevCart) => {
@@ -83,20 +78,51 @@ function App() {
 
   return (
     <BrowserRouter>
-      <Toaster position="top-center" reverseOrder={false} />
+      {/* Toaster con estilo Apple - glassmorphism */}
+      <Toaster
+        position="top-center"
+        reverseOrder={false}
+        toastOptions={{
+          duration: 3000,
+          style: {
+            background: 'rgba(255, 255, 255, 0.9)',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
+            color: '#1e293b',
+            borderRadius: '9999px',
+            padding: '12px 20px',
+            fontSize: '14px',
+            fontWeight: '500',
+            boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.02)',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+          },
+          success: {
+            iconTheme: {
+              primary: '#10b981',
+              secondary: 'white',
+            },
+          },
+          error: {
+            iconTheme: {
+              primary: '#ef4444',
+              secondary: 'white',
+            },
+          },
+        }}
+      />
 
       <Routes>
         {/* Rutas Públicas */}
-        <Route 
-            path="/" 
-            element={
-                <Home 
-                    cart={cart} 
-                    addToCart={addToCart} 
-                    removeFromCart={removeFromCart} 
-                    deleteFromCart={deleteFromCart} 
-                />
-            } 
+        <Route
+          path="/"
+          element={
+            <Home
+              cart={cart}
+              addToCart={addToCart}
+              removeFromCart={removeFromCart}
+              deleteFromCart={deleteFromCart}
+            />
+          }
         />
 
         <Route
@@ -119,15 +145,15 @@ function App() {
         <Route path="/about" element={<About cart={cart} />} />
         <Route path="/contact" element={<Contact cart={cart} />} />
         <Route path="/curiosities" element={<Curiosities cart={cart} />} />
-        
+
         {/* Login */}
         <Route path="/admin" element={<AdminLogin />} />
-        
+
         {/* 🔒 ZONA SEGURA 🔒 */}
         <Route element={<ProtectedRoute />}>
-            <Route path="/admin/dashboard" element={<AdminDashboard />} />
+          <Route path="/admin/dashboard" element={<AdminDashboard />} />
         </Route>
-        
+
         <Route path="*" element={<NotFound cart={cart} />} />
       </Routes>
     </BrowserRouter>

@@ -7,19 +7,19 @@ export default function TablePagination({ currentPage, totalItems, itemsPerPage,
   if (totalPages <= 1) return null;
 
   return (
-    <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6 mt-4 rounded-b-2xl">
+    <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-4 sm:px-6 mt-4 rounded-b-2xl shadow-sm">
       <div className="flex flex-1 justify-between sm:hidden">
         <button
           onClick={() => onPageChange(Math.max(1, currentPage - 1))}
           disabled={currentPage === 1}
-          className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          className="relative inline-flex items-center rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
         >
           Anterior
         </button>
         <button
           onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
           disabled={currentPage === totalPages}
-          className="relative ml-3 inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          className="relative ml-3 inline-flex items-center rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
         >
           Siguiente
         </button>
@@ -27,33 +27,44 @@ export default function TablePagination({ currentPage, totalItems, itemsPerPage,
       <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
         <div>
           <p className="text-sm text-gray-700">
-            Mostrando <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span> a <span className="font-medium">{Math.min(currentPage * itemsPerPage, totalItems)}</span> de <span className="font-medium">{totalItems}</span> resultados
+            Mostrando{' '}
+            <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span> a{' '}
+            <span className="font-medium">
+              {Math.min(currentPage * itemsPerPage, totalItems)}
+            </span>{' '}
+            de <span className="font-medium">{totalItems}</span> resultados
           </p>
         </div>
         <div>
-          <nav className="isolate inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
+          <nav
+            className="isolate inline-flex -space-x-px rounded-xl shadow-sm"
+            aria-label="Pagination"
+          >
             <button
               onClick={() => onPageChange(Math.max(1, currentPage - 1))}
               disabled={currentPage === 1}
-              className="relative inline-flex items-center rounded-l-md px-2 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 disabled:opacity-50"
+              className="relative inline-flex items-center rounded-l-xl px-2.5 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 disabled:opacity-50 transition-colors"
             >
               <span className="sr-only">Anterior</span>
               <ChevronLeft className="h-5 w-5" aria-hidden="true" />
             </button>
-            {/* Números de página simples */}
             {[...Array(totalPages)].map((_, idx) => (
-                <button
-                    key={idx}
-                    onClick={() => onPageChange(idx + 1)}
-                    className={`relative inline-flex items-center px-4 py-2 text-sm font-semibold ring-1 ring-inset ring-gray-300 focus:z-20 focus:outline-offset-0 ${currentPage === idx + 1 ? 'bg-blue-600 text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600' : 'text-gray-900 hover:bg-gray-50'}`}
-                >
-                    {idx + 1}
-                </button>
+              <button
+                key={idx}
+                onClick={() => onPageChange(idx + 1)}
+                className={`relative inline-flex items-center px-4 py-2 text-sm font-semibold ring-1 ring-inset ring-gray-300 focus:z-20 focus:outline-offset-0 transition-colors ${
+                  currentPage === idx + 1
+                    ? 'bg-blue-600 text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600'
+                    : 'text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                {idx + 1}
+              </button>
             ))}
             <button
               onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
               disabled={currentPage === totalPages}
-              className="relative inline-flex items-center rounded-r-md px-2 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 disabled:opacity-50"
+              className="relative inline-flex items-center rounded-r-xl px-2.5 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 disabled:opacity-50 transition-colors"
             >
               <span className="sr-only">Siguiente</span>
               <ChevronRight className="h-5 w-5" aria-hidden="true" />

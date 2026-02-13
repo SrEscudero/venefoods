@@ -6,94 +6,100 @@ import logoVenefoods from '../assets/images/logo.jpg';
 export default function Navbar({ cartCount, onSearch, isDetailPage }) {
   const location = useLocation();
 
-  // Estilos para resaltar el link de la página actual
   const linkClass = (path) => `
-    text-sm font-bold transition-colors duration-200
-    ${location.pathname === path ? 'text-blue-600' : 'text-gray-500 hover:text-slate-900'}
+    text-sm font-semibold transition-all duration-300 px-5 py-2.5 rounded-full
+    ${
+      location.pathname === path
+        ? 'text-slate-900 bg-white shadow-md'
+        : 'text-slate-500 hover:text-slate-900 hover:bg-white/70'
+    }
   `;
 
   return (
-    <header className={`sticky top-0 z-40 transition-all duration-300 ${
-      isDetailPage
-        ? "bg-white/90 md:bg-white/80 border-b md:border-b-0 backdrop-blur-xl"
-        : "bg-white/80 backdrop-blur-xl border-b border-gray-200/50"
-    }`}>
+    <header
+      className={`sticky top-0 z-50 transition-all duration-500 ${
+        isDetailPage
+          ? 'bg-white/80 border-b border-white/20 backdrop-blur-xl shadow-sm'
+          : 'bg-white/70 backdrop-blur-xl border-b border-white/20 shadow-sm'
+      }`}
+    >
       <div className="max-w-7xl mx-auto px-4 lg:px-8 py-3 flex items-center justify-between gap-4">
-
         {/* 1. ZONA IZQUIERDA: Logo o Volver */}
-        <div className="flex items-center gap-3 min-w-max">
+        <div className="flex items-center gap-4 min-w-max">
           {isDetailPage ? (
             <Link
               to="/"
-              className="hidden md:flex items-center gap-2 text-slate-600 hover:text-blue-600 transition font-medium p-2 hover:bg-gray-100 rounded-xl"
+              className="flex items-center gap-2 text-slate-600 hover:text-slate-900 transition font-bold text-sm bg-white/50 px-5 py-2.5 rounded-full hover:bg-white border border-transparent hover:border-slate-200 hover:shadow-md"
             >
-              <ArrowLeft size={20} /> Volver al menú
+              <ArrowLeft size={18} />
+              <span className="hidden md:inline">Volver al menú</span>
             </Link>
           ) : (
-            <Link to="/" className="flex items-center gap-3">
-              {/* LOGO LIMPIO: Sin fondo amarillo, solo la imagen */}
-              <img
-                src={logoVenefoods}
-                alt="Logo Venefoods"
-                className="w-10 h-10 rounded-xl object-cover border border-gray-100"
-              />
-
+            <Link to="/" className="flex items-center gap-3 group">
+              <div className="relative">
+                <div className="absolute inset-0 bg-yellow-400 rounded-2xl blur-lg opacity-20 group-hover:opacity-40 transition-opacity"></div>
+                <img
+                  src={logoVenefoods}
+                  alt="Logo Venefoods"
+                  className="relative w-10 h-10 rounded-2xl object-cover shadow-sm border border-white/50 group-hover:scale-110 transition-transform duration-300"
+                />
+              </div>
               <div className="hidden lg:block">
-                <h1 className="text-xl font-bold text-slate-900 tracking-tight leading-none">
+                <h1 className="text-xl font-black text-slate-900 tracking-tight leading-none group-hover:text-blue-600 transition-colors">
                   Venefoods
                 </h1>
-                <p className="text-[11px] text-gray-500 font-medium tracking-wide">
+                <p className="text-[10px] text-slate-400 font-bold tracking-widest uppercase mt-0.5">
                   Sabor Criollo
                 </p>
               </div>
             </Link>
           )}
         </div>
-        
-        <div className="bg-blue-900 text-white text-xs font-bold text-center py-2 px-4 relative z-800 rounded-full hidden sm:inline-block">
-        🚀 Envío GRATIS en Passo Fundo por compras superiores a <span className="text-yellow-400">R$ 100,00</span>
-        </div>
 
-        {/* 2. ZONA CENTRAL: Navegación (Solo PC/Tablet) */}
-        <nav className="hidden md:flex items-center gap-6 mx-4">
-          <Link to="/" className={linkClass("/")}>Inicio</Link>
-          <Link to="/about" className={linkClass("/about")}>Nosotros</Link>
-          <Link to="/contact" className={linkClass("/contact")}>Contacto</Link>
+        {/* 2. ZONA CENTRAL: Navegación (Píldoras Flotantes) */}
+        <nav className="hidden md:flex items-center gap-1 bg-slate-100/50 p-1 rounded-full border border-white/30 backdrop-blur-md shadow-sm">
+          <Link to="/" className={linkClass('/')}>
+            Inicio
+          </Link>
+          <Link to="/about" className={linkClass('/about')}>
+            Nosotros
+          </Link>
+          <Link to="/contact" className={linkClass('/contact')}>
+            Contacto
+          </Link>
         </nav>
 
         {/* 3. ZONA DERECHA: Buscador y Carrito */}
         <div className="flex items-center gap-3 flex-1 justify-end max-w-xl">
-
-          {/* Buscador */}
+          {/* Buscador iOS Style */}
           {!isDetailPage && (
-            <div className="relative group w-full max-w-[200px] sm:max-w-xs lg:max-w-md transition-all duration-300">
+            <div className="relative group w-full max-w-[180px] sm:max-w-xs transition-all duration-300 focus-within:max-w-sm">
               <Search
-                className="absolute left-3 top-2.5 text-gray-400 group-focus-within:text-blue-600 transition-colors"
-                size={18}
+                className="absolute left-3.5 top-2.5 text-slate-400 group-focus-within:text-blue-500 transition-colors"
+                size={16}
               />
               <input
                 type="text"
                 onChange={(e) => onSearch && onSearch(e.target.value)}
                 placeholder="Buscar..."
-                className="w-full bg-gray-100/80 focus:bg-white text-gray-900 rounded-xl pl-9 pr-4 py-2 outline-none ring-2 ring-transparent focus:ring-blue-500/20 transition-all text-sm font-medium shadow-sm"
+                className="w-full bg-slate-100/50 hover:bg-slate-100 focus:bg-white text-slate-900 rounded-2xl pl-10 pr-4 py-2.5 outline-none ring-2 ring-transparent focus:ring-blue-500/20 focus:shadow-lg transition-all text-sm font-medium placeholder:text-slate-400 border border-transparent focus:border-blue-200"
               />
             </div>
           )}
 
-          {/* Botón Carrito */}
+          {/* Botón Carrito (Círculo Oscuro) */}
           <Link
             to="/checkout"
-            className="relative p-2.5 bg-gray-100 rounded-full text-blue-600 hover:bg-blue-50 transition active:scale-90 hover:shadow-md flex-shrink-0"
+            className="relative p-2.5 bg-slate-900 text-white rounded-full hover:bg-slate-800 transition-all active:scale-90 hover:shadow-lg hover:shadow-slate-900/20 flex-shrink-0"
           >
-            <ShoppingBag size={20} />
+            <ShoppingBag size={18} />
             {cartCount > 0 && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white animate-bounce-short">
+              <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[9px] font-bold flex items-center justify-center rounded-full border-2 border-white animate-bounce-subtle">
                 {cartCount}
               </span>
             )}
           </Link>
         </div>
-
       </div>
     </header>
   );

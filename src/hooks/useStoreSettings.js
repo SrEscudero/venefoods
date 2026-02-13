@@ -1,40 +1,43 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../supabase/client';
+import { db } from '../firebase/client';
+import { collection, onSnapshot } from 'firebase/firestore';
 
 export function useStoreSettings() {
   const [settings, setSettings] = useState({
-    storeStatus: 'open', // 'open' | 'closed'
+    storeStatus: 'open',
     closedMessage: '',
-    shippingMin: 100,
     bannerUrl: '',
-    loading: true
+    whatsappNumber: '5554993294396', // Valor por defecto
+    topBarText: '',
+    topBarActive: false,
+    shippingMin: 0,
+    pixKey: ''
   });
 
   useEffect(() => {
-    const fetchSettings = async () => {
-      try {
-        const { data, error } = await supabase.from('site_settings').select('*');
-        if (error) throw error;
+    // Escuchamos la colección "site_settings" en tiempo real
+    const unsubscribe = onSnapshot(collection(db, "site_settings"), (snapshot) => {
+      const data = {};
+      
+      snapshot.forEach((doc) => {
+        // Mapeamos: ID del documento -> Valor
+        data[doc.id] = doc.data().value;
+      });
 
-        if (data) {
-          const configMap = {};
-          data.forEach(item => configMap[item.key] = item.value);
+      // Actualizamos el estado con los datos reales de Firebase
+      setSettings({
+        storeStatus: data.store_status || 'open',
+        closedMessage: data.store_closed_message || 'Cerrado temporalmente',
+        bannerUrl: data.home_banner || '', // Aquí llega la imagen Base64
+        whatsappNumber: data.whatsapp_number || '',
+        topBarText: data.top_bar_text || '',
+        topBarActive: data.top_bar_active === 'true',
+        shippingMin: Number(data.shipping_min_value) || 0,
+        pixKey: data.pix_key || ''
+      });
+    });
 
-          setSettings({
-            storeStatus: configMap.store_status || 'open',
-            closedMessage: configMap.store_closed_message || 'Estamos cerrados por el momento.',
-            shippingMin: Number(configMap.shipping_min_value) || 100,
-            bannerUrl: configMap.home_banner || '',
-            loading: false
-          });
-        }
-      } catch (err) {
-        console.error("Error cargando configuración:", err);
-        setSettings(prev => ({ ...prev, loading: false }));
-      }
-    };
-
-    fetchSettings();
+    return () => unsubscribe();
   }, []);
 
   return settings;
