@@ -182,12 +182,13 @@ export default function AdminDashboard() {
     return () => unsubscribe();
   }, [navigate]);
 
-  // REFERENCIA PARA GUARDAR ESTADO ANTERIOR SIN CAUSAR RENDERIZADO EXTRA
-  const prevOrdersRef = useRef([]);
+// --- REFERENCIAS PARA CONTROL DE NOTIFICACIONES ---
+  const prevOrdersRef = useRef([]); // Guarda la lista anterior sin causar re-render
+  const isFirstLoad = useRef(true); // Candado para la primera carga
 
-  // --- 2. LISTENER EN TIEMPO REAL (Pedidos + Sonido) ---
+  // --- 2. LISTENER EN TIEMPO REAL BLINDADO ---
   useEffect(() => {
-    // Escuchamos la colección "orders" ordenada por fecha
+    // Consulta: Ordenar por fecha descendente (el más nuevo primero)
     const q = query(collection(db, "orders"), orderBy("created_at", "desc"));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -196,26 +197,46 @@ export default function AdminDashboard() {
         ...doc.data(),
       }));
 
-      // LÓGICA DE DETECCIÓN (USANDO REF PARA EVITAR DOBLE DISPARO)
+      // Si es la PRIMERA vez que carga la página (F5 o entrar):
+      if (isFirstLoad.current) {
+        // Solo guardamos los datos, NO notificamos
+        prevOrdersRef.current = ordersData;
+        setOrders(ordersData);
+        setLoading(false);
+        isFirstLoad.current = false; // Quitamos el candado para la próxima
+        return;
+      }
+
+      // Si NO es la primera vez, verificamos si hay cambios reales
       const prevOrders = prevOrdersRef.current;
-
-      // Si ya teníamos pedidos y hay uno nuevo...
-      if (prevOrders.length > 0 && ordersData.length > prevOrders.length) {
+      
+      // Verificamos si llegó un pedido NUEVO (comparamos el ID del más reciente)
+      if (ordersData.length > 0) {
         const latestNew = ordersData[0];
-        const latestOld = prevOrders[0];
+        const latestOld = prevOrders.length > 0 ? prevOrders[0] : null;
 
-        if (latestNew.id !== latestOld.id) {
+        // Si el ID del más nuevo es diferente al que teníamos antes...
+        if (!latestOld || latestNew.id !== latestOld.id) {
+          // 🔔 SONIDO Y ALERTA
           playNotificationSound();
+          
+          // TRUCO FINAL: Usamos el ID del pedido como ID del toast.
+          // Esto impide físicamente que salgan dos notificaciones iguales.
           toast.success(`🔔 Nuevo Pedido: ${latestNew.customer_name}`, {
+            id: `order-notif-${latestNew.id}`, // <--- LA CLAVE MÁGICA
             duration: 6000,
             position: "top-center",
-            style: { background: '#10B981', color: 'white', fontWeight: 'bold' },
-            id: `new-order-${latestNew.id}` 
+            style: { 
+              background: '#10B981', 
+              color: 'white', 
+              fontWeight: 'bold', 
+              boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)'
+            }
           });
         }
       }
 
-      // Actualizamos la referencia y el estado
+      // Actualizamos estado y referencia
       prevOrdersRef.current = ordersData;
       setOrders(ordersData);
       setLoading(false);
