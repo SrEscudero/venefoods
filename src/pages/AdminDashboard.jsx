@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { db, auth } from "../firebase/client";
 import {
-  collection, getDocs, doc, deleteDoc, updateDoc, addDoc, setDoc, runTransaction
+  collection, getDocs, doc, deleteDoc, updateDoc, addDoc, setDoc, runTransaction, limit,
+  onSnapshot, query, orderBy
 } from "firebase/firestore";
 import { signOut, onAuthStateChanged } from "firebase/auth";
 
@@ -13,13 +14,14 @@ import {
   MessageCircle, Image as ImageIcon, Upload, Download, FileText,
   FileSpreadsheet, Settings, Truck, CreditCard, Megaphone, Lock, Unlock,
   Eye, Filter, CheckCircle, XCircle, Clock3, TrendingUp, History, Tags,
-  ChevronRight, ChevronLeft
+  ChevronRight, ChevronLeft, Printer
 } from "lucide-react";
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer } from "recharts";
 import {
   exportToExcel, exportToCSV, exportToPDF, exportToTXT, generateOrderReceipt,
 } from "../utils/exportHelper";
 import TablePagination from "../components/TablePagination";
+import { printOrderTicket } from "../utils/printTicket";
 
 // ============================================
 // FUNCIÓN DE COMPRESIÓN AGRESIVA (ANTI-ERROR FIREBASE)
@@ -28,15 +30,15 @@ const compressImage = (file) => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
-    
+
     reader.onload = (event) => {
       const img = new Image();
       img.src = event.target.result;
-      
+
       img.onload = () => {
         const canvas = document.createElement("canvas");
         // Reducimos a 600px para asegurar que el Base64 sea ligero (< 300kb)
-        const MAX_WIDTH = 600; 
+        const MAX_WIDTH = 600;
         const MAX_HEIGHT = 600;
 
         let width = img.width;
@@ -70,19 +72,41 @@ const compressImage = (file) => {
         // 3. FORZAR JPEG a calidad 0.6 (Garantiza tamaño pequeño)
         // Esto reduce un archivo de 800kb a unos 50-80kb en Base64
         const dataUrl = canvas.toDataURL("image/jpeg", 0.6);
-        
+
         resolve(dataUrl);
       };
-      
+
       img.onerror = (error) => reject(error);
     };
-    
+
     reader.onerror = (error) => reject(error);
   });
 };
 
+// Función auxiliar para reproducir sonido
+const playNotificationSound = () => {
+  const audio = new Audio("https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.m4a");
+  audio.play().catch(error => console.log("Error al reproducir sonido (interacción requerida):", error));
+};
+
+// --- FUNCIÓN DE AUDITORÍA ---
+const logAction = async (action, details, userEmail) => {
+  try {
+    await addDoc(collection(db, "activity_logs"), {
+      action,        // Ej: "Eliminar Pedido"
+      details,       // Ej: "Pedido #123 eliminado"
+      user: userEmail || "desconocido",
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error("Error guardando log:", error);
+  }
+};
+
 export default function AdminDashboard() {
   const navigate = useNavigate();
+  const user = auth.currentUser;
+  const isOwner = user?.email === "admin@venefoods.com";
   const [activeTab, setActiveTab] = useState("dashboard");
   const [dateFilter, setDateFilter] = useState("all");
 
@@ -90,15 +114,22 @@ export default function AdminDashboard() {
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [coupons, setCoupons] = useState([]);
+  const [newCoupon, setNewCoupon] = useState({ code: "", discount: "", type: "percent" });
   const [loading, setLoading] = useState(true);
+
+  const [expenses, setExpenses] = useState([]);
+  const [expenseModalOpen, setExpenseModalOpen] = useState(false); 
 
   // Configuración Global
   const [config, setConfig] = useState({
-    home_banner: "",
+    home_banner: "", // (Mantener por compatibilidad o borrar si ya no se usa)
+    banners: [],     // <--- NUEVO: Para el carrusel
+    shipping_zones: [], // <--- NUEVO: Para las zonas
     whatsapp_number: "",
     pix_key: "",
     shipping_min_value: "100",
-    top_bar_text: "🚀 Envío GRATIS en Passo Fundo por compras superiores a",
+    top_bar_text: "🚀 Envío GRATIS...",
     top_bar_active: "true",
     store_status: "open",
     store_closed_message: "",
@@ -115,6 +146,7 @@ export default function AdminDashboard() {
   const [productModalOpen, setProductModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [orderModalOpen, setOrderModalOpen] = useState(false);
+  const [globalHistoryOpen, setGlobalHistoryOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [posModalOpen, setPosModalOpen] = useState(false);
   const [clientHistoryModalOpen, setClientHistoryModalOpen] = useState(false);
@@ -130,14 +162,17 @@ export default function AdminDashboard() {
     setSearchTerm("");
   }, [activeTab, orderStatusFilter]);
 
-  // --- 1. AUTENTICACIÓN Y CARGA (FIREBASE) ---
+  // --- 1. AUTENTICACIÓN Y CARGA DE DATOS ESTÁTICOS ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (!user) {
         navigate("/admin");
       } else {
-        Promise.all([fetchProducts(), fetchOrders(), fetchSettings(), fetchCategories()])
-          .then(() => setLoading(false))
+        // NOTA: Quitamos fetchOrders() de aquí porque ahora va por separado
+        Promise.all([fetchProducts(), fetchSettings(), fetchCategories(), fetchCoupons(), fetchExpenses()])
+          .then(() => {
+            // No ponemos setLoading(false) aquí todavía para esperar a los pedidos
+          })
           .catch(err => {
             console.error(err);
             setLoading(false);
@@ -146,6 +181,52 @@ export default function AdminDashboard() {
     });
     return () => unsubscribe();
   }, [navigate]);
+
+  // REFERENCIA PARA GUARDAR ESTADO ANTERIOR SIN CAUSAR RENDERIZADO EXTRA
+  const prevOrdersRef = useRef([]);
+
+  // --- 2. LISTENER EN TIEMPO REAL (Pedidos + Sonido) ---
+  useEffect(() => {
+    // Escuchamos la colección "orders" ordenada por fecha
+    const q = query(collection(db, "orders"), orderBy("created_at", "desc"));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const ordersData = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+
+      // LÓGICA DE DETECCIÓN (USANDO REF PARA EVITAR DOBLE DISPARO)
+      const prevOrders = prevOrdersRef.current;
+
+      // Si ya teníamos pedidos y hay uno nuevo...
+      if (prevOrders.length > 0 && ordersData.length > prevOrders.length) {
+        const latestNew = ordersData[0];
+        const latestOld = prevOrders[0];
+
+        if (latestNew.id !== latestOld.id) {
+          playNotificationSound();
+          toast.success(`🔔 Nuevo Pedido: ${latestNew.customer_name}`, {
+            duration: 6000,
+            position: "top-center",
+            style: { background: '#10B981', color: 'white', fontWeight: 'bold' },
+            id: `new-order-${latestNew.id}` 
+          });
+        }
+      }
+
+      // Actualizamos la referencia y el estado
+      prevOrdersRef.current = ordersData;
+      setOrders(ordersData);
+      setLoading(false);
+
+    }, (error) => {
+      console.error("Error suscribiendo a pedidos:", error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // --- 2. FUNCIONES DE LECTURA (FIREBASE) ---
   const fetchProducts = async () => {
@@ -179,15 +260,45 @@ export default function AdminDashboard() {
     }
   };
 
+  // --- GESTIÓN DE GASTOS ---
+  const fetchExpenses = async () => {
+    try {
+      const q = query(collection(db, "expenses"), orderBy("date", "desc"));
+      const querySnapshot = await getDocs(q);
+      const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setExpenses(data);
+    } catch (error) {
+      console.error("Error gastos:", error);
+    }
+  };
+
+  // --- GESTIÓN DE GASTOS ---
+  const handleSaveExpense = async (expenseData) => {
+    try {
+      // Nota: Asegúrate de importar 'addDoc' y 'collection' de firebase/firestore
+      await addDoc(collection(db, "expenses"), { ...expenseData, user: user?.email });
+      toast.success(`Gasto de R$ ${expenseData.amount} registrado`);
+      setExpenseModalOpen(false);
+      // fetchExpenses(); // Si tienes esta función, descoméntala para actualizar al instante
+    } catch (error) {
+      console.error(error);
+      toast.error("Error al guardar gasto");
+    }
+  };
+
   const fetchSettings = async () => {
     try {
       const querySnapshot = await getDocs(collection(db, "site_settings"));
       if (!querySnapshot.empty) {
         const newConfig = { ...config };
         querySnapshot.docs.forEach((doc) => {
-          newConfig[doc.id] = doc.data().value;
+          try {
+            newConfig[doc.id] = JSON.parse(doc.data().value);
+          } catch (e) {
+            newConfig[doc.id] = doc.data().value;
+          }
         });
-        setConfig(newConfig);
+        setConfig((prev) => ({ ...prev, ...newConfig }));
       }
     } catch (error) {
       console.error("Error settings:", error);
@@ -197,6 +308,45 @@ export default function AdminDashboard() {
   const handleLogout = async () => {
     await signOut(auth);
     navigate("/admin");
+  };
+
+  // --- GESTIÓN DE CUPONES ---
+  const fetchCoupons = async () => {
+    try {
+      const querySnapshot = await getDocs(collection(db, "coupons"));
+      const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setCoupons(data);
+    } catch (error) {
+      console.error("Error coupons:", error);
+    }
+  };
+
+  const handleSaveCoupon = async () => {
+    if (!newCoupon.code || !newCoupon.discount) return toast.error("Completa los datos");
+    try {
+      await addDoc(collection(db, "coupons"), {
+        code: newCoupon.code.toUpperCase().trim(),
+        discount: Number(newCoupon.discount),
+        type: newCoupon.type, // 'percent' o 'fixed'
+        active: true
+      });
+      toast.success("Cupón creado");
+      setNewCoupon({ code: "", discount: "", type: "percent" });
+      fetchCoupons();
+    } catch (error) {
+      toast.error("Error al crear cupón");
+    }
+  };
+
+  const handleDeleteCoupon = async (id) => {
+    if (!confirm("¿Borrar cupón?")) return;
+    try {
+      await deleteDoc(doc(db, "coupons", id));
+      toast.success("Cupón eliminado");
+      fetchCoupons();
+    } catch (error) {
+      toast.error("Error al eliminar");
+    }
   };
 
   // --- GESTIÓN DE CATEGORÍAS ---
@@ -266,6 +416,11 @@ export default function AdminDashboard() {
     try {
       const orderRef = doc(db, "orders", orderId);
       await updateDoc(orderRef, updates);
+      await logAction(
+        "Actualizar Pedido",
+        `Pedido #${orderId} cambió a estado: ${updates.status}`,
+        user?.email
+      );
       toast.success(`Pedido ${updates.status}`);
       setOrders(
         orders.map((o) => (o.id === orderId ? { ...o, ...updates } : o))
@@ -277,15 +432,14 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteOrder = async (orderId) => {
-    if (
-      !window.confirm(
-        "⚠️ ¿Estás seguro? Si borras el pedido, desaparecerá del historial del cliente.\n\nMejor usa la opción 'CANCELAR' para mantener el registro."
-      )
-    )
-      return;
+    if (!window.confirm("⚠️ ¿Estás seguro?...")) return; // (Tu confirmación actual)
 
     try {
       await deleteDoc(doc(db, "orders", orderId));
+
+      // 👇 AGREGAR ESTO:
+      await logAction("Eliminar Pedido", `Pedido #${orderId} eliminado permanentemente`, user?.email);
+
       toast.success("Eliminado permanentemente");
       setOrders(orders.filter((o) => o.id !== orderId));
       setOrderModalOpen(false);
@@ -391,73 +545,176 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleExport = (type, format) => {
-    let dataToExport = [];
-    let fileName = `reporte_${type}`;
-    let pdfColumns = [];
+  // --- LÓGICA DE BANNERS (CARRUSEL) ---
+  const handleAddBanner = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const toastId = toast.loading("Procesando imagen...");
+    try {
+      const base64 = await compressImage(file);
+      const currentBanners = Array.isArray(config.banners) ? config.banners : [];
+      const newBanners = [...currentBanners, base64];
 
-    if (type === "ventas") {
-      dataToExport = orders.map((o) => ({
-        ID: o.id,
-        Fecha: new Date(o.created_at).toLocaleDateString(),
-        Cliente: o.customer_name,
-        Total: `R$ ${o.total}`,
-        Estado: o.status,
-      }));
-      pdfColumns = ["ID", "Fecha", "Cliente", "Total", "Estado"];
-    } else if (type === "clientes") {
-      dataToExport = stats.clientsList.map((c) => ({
-        Nombre: c.name,
-        Telefono: c.phone,
-        Total: `R$ ${c.totalSpent.toFixed(2)}`,
-        Pedidos: c.ordersCount,
-      }));
-      pdfColumns = ["Nombre", "Telefono", "Total", "Pedidos"];
-    } else if (type === "inventario") {
-      dataToExport = products.map((p) => ({
-        ID: p.id,
-        Producto: p.name,
-        Stock: p.stock,
-        Precio: `R$ ${p.price}`,
-      }));
-      pdfColumns = ["ID", "Producto", "Stock", "Precio"];
+      // Guardamos como JSON string
+      await handleSaveConfig("banners", JSON.stringify(newBanners));
+      setConfig(prev => ({ ...prev, banners: newBanners }));
+      toast.success("Banner agregado", { id: toastId });
+    } catch (error) {
+      toast.error("Error al subir", { id: toastId });
     }
+  };
 
-    if (format === "xlsx") exportToExcel(dataToExport, fileName);
-    if (format === "csv") exportToCSV(dataToExport, fileName);
-    if (format === "txt") exportToTXT(dataToExport, fileName);
-    if (format === "pdf")
-      exportToPDF(`Reporte ${type}`, pdfColumns, dataToExport, fileName);
+  const handleRemoveBanner = async (index) => {
+    const newBanners = config.banners.filter((_, i) => i !== index);
+    await handleSaveConfig("banners", JSON.stringify(newBanners));
+    setConfig(prev => ({ ...prev, banners: newBanners }));
+    toast.success("Banner eliminado");
+  };
 
-    toast.success(`Reporte ${format.toUpperCase()} generado`);
+  // --- LÓGICA DE ZONAS DE ENVÍO ---
+  const [newZone, setNewZone] = useState({ name: "", price: "" });
+
+  const handleAddZone = async () => {
+    if (!newZone.name || !newZone.price) return toast.error("Completa los datos de la zona");
+    const currentZones = Array.isArray(config.shipping_zones) ? config.shipping_zones : [];
+    const newZones = [...currentZones, { name: newZone.name, price: Number(newZone.price) }];
+
+    await handleSaveConfig("shipping_zones", JSON.stringify(newZones));
+    setConfig(prev => ({ ...prev, shipping_zones: newZones }));
+    setNewZone({ name: "", price: "" });
+    toast.success("Zona agregada");
+  };
+
+  const handleRemoveZone = async (index) => {
+    const newZones = config.shipping_zones.filter((_, i) => i !== index);
+    await handleSaveConfig("shipping_zones", JSON.stringify(newZones));
+    setConfig(prev => ({ ...prev, shipping_zones: newZones }));
+  };
+
+  // --- FUNCIÓN DE EXPORTACIÓN (REEMPLAZAR ESTA FUNCIÓN ENTERA) ---
+  const handleExport = (type, format) => {
+    console.log("Intentando exportar:", type, format); // Debug para ver si entra
+
+    let dataToExport = [];
+    let fileName = `reporte_${type}_${new Date().toISOString().split('T')[0]}`;
+    let pdfColumns = [];
+    let title = "";
+
+    try {
+      if (type === "ventas") {
+        title = "Reporte de Ventas";
+        dataToExport = orders.map((o) => ({
+          ID: o.id,
+          Fecha: new Date(o.created_at).toLocaleDateString(),
+          Cliente: o.customer_name,
+          Total: `R$ ${Number(o.total).toFixed(2)}`, // Aseguramos que sea número
+          Estado: o.status,
+        }));
+        pdfColumns = ["ID", "Fecha", "Cliente", "Total", "Estado"];
+      } 
+      else if (type === "clientes") {
+        title = "Reporte de Clientes";
+        dataToExport = stats.clientsList.map((c) => ({
+          Nombre: c.name,
+          Telefono: c.phone,
+          Total: `R$ ${Number(c.totalSpent).toFixed(2)}`,
+          Pedidos: c.ordersCount,
+        }));
+        pdfColumns = ["Nombre", "Telefono", "Total", "Pedidos"];
+      } 
+      else if (type === "inventario") {
+        title = "Inventario Actual";
+        dataToExport = products.map((p) => ({
+          ID: p.id,
+          Producto: p.name,
+          Stock: p.stock,
+          Precio: `R$ ${Number(p.price).toFixed(2)}`,
+        }));
+        pdfColumns = ["ID", "Producto", "Stock", "Precio"];
+      }
+      // --- LÓGICA DEL CIERRE DE CAJA (Z-CUT) ---
+      else if (type === "cierre_caja") {
+        title = `CIERRE DE CAJA - ${new Date().toLocaleDateString()}`;
+        
+        // Verificamos que stats existan para evitar errores
+        const totalRevenue = stats?.totalRevenue || 0;
+        const totalExpenses = stats?.totalExpenses || 0;
+        const totalProfit = stats?.totalProfit || 0;
+
+        // 1. Resumen General
+        dataToExport.push({ Concepto: "----------------", Valor: "----------" });
+        dataToExport.push({ Concepto: "VENTAS BRUTAS", Valor: `R$ ${totalRevenue.toFixed(2)}` });
+        dataToExport.push({ Concepto: "GASTOS OPERATIVOS", Valor: `- R$ ${totalExpenses.toFixed(2)}` });
+        dataToExport.push({ Concepto: "GANANCIA NETA", Valor: `R$ ${totalProfit.toFixed(2)}` });
+        dataToExport.push({ Concepto: "----------------", Valor: "----------" });
+        
+        // 2. Desglose por Método de Pago
+        const pagos = { efectivo: 0, pix: 0, tarjeta: 0, whatsapp: 0 };
+        
+        // Filtramos solo ordenes válidas (no canceladas)
+        orders.filter(o => o.status !== 'cancelado').forEach(o => {
+          // Normalizar el método de pago a minúsculas para evitar duplicados
+          const metodo = o.payment_method ? o.payment_method.toLowerCase() : 'otros';
+          
+          if (pagos[metodo] !== undefined) {
+            pagos[metodo] += Number(o.total);
+          } else {
+            pagos[metodo] = Number(o.total); // Si es un método nuevo, lo inicializamos
+          }
+        });
+
+        dataToExport.push({ Concepto: "Efectivo en Caja", Valor: `R$ ${(pagos.efectivo || 0).toFixed(2)}` });
+        dataToExport.push({ Concepto: "Pix Recibido", Valor: `R$ ${(pagos.pix || 0).toFixed(2)}` });
+        dataToExport.push({ Concepto: "Tarjetas", Valor: `R$ ${(pagos.tarjeta || 0).toFixed(2)}` });
+        
+        pdfColumns = ["Concepto", "Valor"];
+      }
+
+      // Ejecutar la exportación según el formato
+      if (format === "xlsx") exportToExcel(dataToExport, fileName);
+      else if (format === "csv") exportToCSV(dataToExport, fileName);
+      else if (format === "txt") exportToTXT(dataToExport, fileName);
+      else if (format === "pdf") {
+        // Verificamos si hay datos antes de llamar al PDF
+        if (dataToExport.length === 0) {
+          toast.error("No hay datos para exportar");
+          return;
+        }
+        exportToPDF(title, pdfColumns, dataToExport, fileName);
+      }
+
+      toast.success(`Reporte generado: ${fileName}`);
+    
+    } catch (error) {
+      console.error("Error exportando:", error);
+      toast.error("Error al generar el reporte. Revisa la consola.");
+    }
   };
 
   const stats = useMemo(() => {
-    let validOrders = orders.filter((o) => o.status !== "cancelado");
-
+    // 1. Definir fechas para filtros
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(now.getDate() - 7);
 
-    validOrders = validOrders.filter((order) => {
-      const orderDate = new Date(order.created_at);
-
-      if (dateFilter === "today") {
-        return orderDate >= startOfDay;
-      }
-      if (dateFilter === "week") {
-        const oneWeekAgo = new Date();
-        oneWeekAgo.setDate(now.getDate() - 7);
-        return orderDate >= oneWeekAgo;
-      }
+    // Helper para verificar fecha (Evita repetir código para pedidos y gastos)
+    const checkDateFilter = (dateStr) => {
+      const date = new Date(dateStr);
+      if (dateFilter === "today") return date >= startOfDay;
+      if (dateFilter === "week") return date >= oneWeekAgo;
       if (dateFilter === "month") {
-        return orderDate.getMonth() === now.getMonth() &&
-          orderDate.getFullYear() === now.getFullYear();
+        return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
       }
-      return true;
-    });
+      return true; 
+    };
 
+    // 2. Filtrar Pedidos Validos (No cancelados y dentro de la fecha)
+    let validOrders = orders.filter((o) => o.status !== "cancelado" && checkDateFilter(o.created_at));
+
+    // 3. Calcular Ingresos y Ganancia Bruta (Ventas - Costos)
     let totalRevenue = 0;
-    let totalProfit = 0;
+    let grossProfit = 0;
 
     validOrders.forEach((order) => {
       totalRevenue += Number(order.total);
@@ -467,10 +724,24 @@ export default function AdminDashboard() {
         const cost = productData ? (Number(productData.cost_price) || 0) : 0;
         const price = Number(item.price);
         const qty = Number(item.quantity);
-        totalProfit += (price - cost) * qty;
+        grossProfit += (price - cost) * qty;
       });
     });
 
+    // 4. Calcular Gastos Operativos (NUEVO)
+    let totalExpenses = 0;
+    const safeExpenses = Array.isArray(expenses) ? expenses : []; // Protección si expenses es undefined
+    
+    safeExpenses.forEach((exp) => {
+      if (checkDateFilter(exp.date)) {
+        totalExpenses += Number(exp.amount);
+      }
+    });
+
+    // 5. Ganancia Neta Real = Bruta - Gastos
+    const netProfit = grossProfit - totalExpenses;
+
+    // 6. Lógica de Clientes (Se mantiene igual, procesa todo el historial)
     const clientsMap = {};
     orders.forEach((order) => {
       const cpfRaw = order.customer_cpf || "";
@@ -519,13 +790,14 @@ export default function AdminDashboard() {
 
     return {
       totalRevenue,
-      totalProfit,
+      totalProfit: netProfit, 
+      totalExpenses,          
       totalOrders: validOrders.length,
       chartData,
       lowStockProducts,
       clientsList
     };
-  }, [products, orders, dateFilter]);
+  }, [products, orders, dateFilter, expenses])
 
   const filteredOrders = orders.filter((order) => {
     if (orderStatusFilter === "todos") return true;
@@ -551,7 +823,7 @@ export default function AdminDashboard() {
       <Toaster position="top-right" toastOptions={{ duration: 3000, style: { background: '#1e293b', color: 'white', borderRadius: '16px' } }} />
 
       {/* SIDEBAR MODERNO - EFECTO VIDRIO */}
-      <aside className="w-20 md:w-72 bg-gradient-to-b from-slate-900/95 to-slate-800/95 backdrop-blur-md fixed h-full flex flex-col z-30 shadow-2xl border-r border-white/10">
+      <aside className="hidden md:flex w-72 bg-gradient-to-b from-slate-900/95 to-slate-800/95 backdrop-blur-md fixed h-full flex flex-col z-30 shadow-2xl border-r border-white/10">
         <div className="p-6 md:px-8 md:py-8">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-blue-600 rounded-xl shadow-lg flex items-center justify-center">
@@ -574,32 +846,36 @@ export default function AdminDashboard() {
             active={activeTab === "sales"}
             onClick={() => setActiveTab("sales")}
           />
-          <SidebarBtn
-            icon={<Users size={20} />}
-            label="Clientes"
-            active={activeTab === "customers"}
-            onClick={() => setActiveTab("customers")}
-          />
-          <SidebarBtn
-            icon={<Package size={20} />}
-            label="Inventario"
-            active={activeTab === "inventory"}
-            onClick={() => setActiveTab("inventory")}
-          />
-          <div className="border-t border-white/10 my-4"></div>
-          <SidebarBtn
-            icon={<Tags size={20} />}
-            label="Categorías"
-            active={activeTab === "categories"}
-            onClick={() => setActiveTab("categories")}
-          />
-          <div className="border-t border-white/10 my-4"></div>
-          <SidebarBtn
-            icon={<Settings size={20} />}
-            label="Configuración"
-            active={activeTab === "config"}
-            onClick={() => setActiveTab("config")}
-          />
+          {/* SOLO DUEÑO VE ESTO */}
+          {isOwner && (
+            <>
+              <SidebarBtn
+                icon={<Users size={20} />}
+                label="Clientes"
+                active={activeTab === "customers"}
+                onClick={() => setActiveTab("customers")}
+              />
+              <SidebarBtn
+                icon={<Package size={20} />}
+                label="Inventario"
+                active={activeTab === "inventory"}
+                onClick={() => setActiveTab("inventory")}
+              />
+              <div className="border-t border-white/10 my-4"></div>
+              <SidebarBtn
+                icon={<Tags size={20} />}
+                label="Categorías"
+                active={activeTab === "categories"}
+                onClick={() => setActiveTab("categories")}
+              />
+              <SidebarBtn
+                icon={<Settings size={20} />}
+                label="Configuración"
+                active={activeTab === "config"}
+                onClick={() => setActiveTab("config")}
+              />
+            </>
+          )}
         </nav>
 
         <div className="p-4 md:p-6 border-t border-white/10">
@@ -612,7 +888,7 @@ export default function AdminDashboard() {
         </div>
       </aside>
 
-      <main className="flex-1 ml-20 md:ml-72 p-4 md:p-8 lg:p-10 overflow-y-auto transition-all duration-300">
+      <main className="flex-1 md:ml-72 p-4 md:p-8 lg:p-10 pb-24 md:pb-8 overflow-y-auto transition-all duration-300">
         {/* DASHBOARD */}
         {activeTab === "dashboard" && (
           <div className="animate-fade-in space-y-8 max-w-7xl mx-auto">
@@ -637,7 +913,7 @@ export default function AdminDashboard() {
                     className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 ${dateFilter === f.id
                       ? 'bg-slate-800 text-white shadow-md'
                       : 'text-gray-500 hover:bg-gray-200/50'
-                    }`}
+                      }`}
                   >
                     {f.label}
                   </button>
@@ -645,32 +921,68 @@ export default function AdminDashboard() {
               </div>
 
               <button
-                onClick={() => setPosModalOpen(true)}
-                className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white px-6 py-3.5 rounded-2xl font-bold shadow-lg flex gap-2 items-center transition-all duration-200 active:scale-95"
-              >
-                <Store size={20} /> Venta Rápida
-              </button>
+                  onClick={() => handleExport("cierre_caja", "pdf")}
+                  className="bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-900 px-4 py-2.5 rounded-xl font-bold shadow-sm flex items-center gap-2 transition-all"
+                  title="Generar reporte Z del día"
+                >
+                  <Printer size={18} /> <span className="hidden md:inline">Cierre Caja</span>
+                </button>
+
+              {/* Botones de Acción */}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setExpenseModalOpen(true)}
+                  className="bg-white border-2 border-red-100 text-red-600 hover:bg-red-50 px-4 py-3.5 rounded-2xl font-bold shadow-sm flex gap-2 items-center transition-all"
+                >
+                  <DollarSign size={20} /> Gasto
+                </button>
+                <button
+                  onClick={() => setPosModalOpen(true)}
+                  className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white px-6 py-3.5 rounded-2xl font-bold shadow-lg flex gap-2 items-center transition-all duration-200 active:scale-95"
+                >
+                  <Store size={20} /> Venta Rápida
+                </button>
+              </div>
+              
             </header>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              
+              {/* 1. VENTAS (Ingreso Bruto) */}
               <StatCard
-                title={dateFilter === 'today' ? "Ventas de Hoy" : "Ventas Totales"}
+                title={dateFilter === 'today' ? "Ventas Hoy" : "Ventas Totales"}
                 value={`R$ ${stats.totalRevenue.toFixed(2)}`}
                 icon={<DollarSign className="text-white" />}
                 color="bg-gradient-to-br from-blue-500 to-blue-600"
               />
+
+              {/* 2. GASTOS (NUEVO - Salidas) */}
               <StatCard
-                title="Ganancia Neta"
-                value={`R$ ${stats.totalProfit.toFixed(2)}`}
-                icon={<TrendingUp className="text-white" />}
-                color="bg-gradient-to-br from-green-500 to-emerald-600"
+                title="Gastos Operativos"
+                value={`- R$ ${stats.totalExpenses.toFixed(2)}`} // Signo negativo visual
+                icon={<DollarSign className="text-white" />}
+                color="bg-gradient-to-br from-red-500 to-red-600" // Rojo de alerta
               />
-              <StatCard
-                title="Pedidos"
-                value={stats.totalOrders}
-                icon={<ShoppingBag className="text-white" />}
-                color="bg-gradient-to-br from-purple-500 to-purple-600"
-              />
+
+              {/* 3. GANANCIA NETA (Real) */}
+              {isOwner ? (
+                <StatCard
+                  title="Ganancia Neta Real"
+                  value={`R$ ${stats.totalProfit.toFixed(2)}`}
+                  icon={<TrendingUp className="text-white" />}
+                  color="bg-gradient-to-br from-emerald-500 to-emerald-600"
+                />
+              ) : (
+                // Si es empleado, ve Pedidos aquí
+                <StatCard
+                  title="Pedidos Completados"
+                  value={stats.totalOrders}
+                  icon={<ShoppingBag className="text-white" />}
+                  color="bg-gradient-to-br from-purple-500 to-purple-600"
+                />
+              )}
+
+              {/* 4. CLIENTES / PEDIDOS */}
               <StatCard
                 title="Clientes VIP"
                 value={stats.clientsList.filter((c) => c.isVip).length}
@@ -715,7 +1027,7 @@ export default function AdminDashboard() {
                     className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 whitespace-nowrap ${orderStatusFilter === tab.id
                       ? "bg-slate-800 text-white shadow-md"
                       : "text-gray-500 hover:bg-gray-200/50"
-                    }`}
+                      }`}
                   >
                     {tab.icon} {tab.label}
                   </button>
@@ -769,7 +1081,7 @@ export default function AdminDashboard() {
                         className={`text-2xl font-bold ${order.status === "cancelado"
                           ? "text-gray-400 line-through"
                           : "text-slate-900"
-                        }`}
+                          }`}
                       >
                         R$ {Number(order.total).toFixed(2)}
                       </span>
@@ -969,7 +1281,7 @@ export default function AdminDashboard() {
                               className={`px-3 py-1.5 rounded-xl text-xs font-bold ${p.stock < 5
                                 ? "bg-red-100 text-red-700 animate-pulse"
                                 : "bg-green-100 text-green-700"
-                              }`}
+                                }`}
                             >
                               {p.stock} {p.stock === 1 ? 'unidad' : 'unidades'}
                             </span>
@@ -1017,7 +1329,6 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {/* CONFIGURACIÓN */}
         {activeTab === "config" && (
           <div className="animate-fade-in max-w-5xl mx-auto space-y-8">
             <h2 className="text-3xl font-bold text-slate-800 flex items-center gap-3 tracking-tight mb-6">
@@ -1027,12 +1338,25 @@ export default function AdminDashboard() {
               Configuración de la Tienda
             </h2>
 
+            {/* Botón de Auditoría (Solo Dueño) */}
+            {isOwner && (
+              <div className="flex justify-end mb-4">
+                <button
+                  onClick={() => setGlobalHistoryOpen(true)}
+                  className="flex items-center gap-2 text-slate-600 hover:text-slate-900 bg-white border border-gray-200 px-4 py-2 rounded-xl font-medium transition-all shadow-sm hover:shadow-md"
+                >
+                  <History size={18} /> Ver Registro de Actividad
+                </button>
+              </div>
+            )}
+
+            {/* 1. ESTADO OPERATIVO */}
             <div className="bg-white/80 backdrop-blur-sm p-8 rounded-3xl shadow-sm border border-gray-100 relative overflow-hidden transition-all hover:shadow-md">
               <div
                 className={`absolute top-0 right-0 p-4 rounded-bl-3xl font-bold uppercase text-xs tracking-wider ${config.store_status === "open"
                   ? "bg-green-100 text-green-700"
                   : "bg-red-100 text-red-700"
-                }`}
+                  }`}
               >
                 {config.store_status === "open" ? "Tienda Online" : "Tienda Cerrada"}
               </div>
@@ -1051,7 +1375,7 @@ export default function AdminDashboard() {
                       className={`px-6 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 ${config.store_status === "open"
                         ? "bg-white text-green-600 shadow-sm"
                         : "text-gray-400 hover:text-gray-600"
-                      }`}
+                        }`}
                     >
                       <Unlock size={16} /> ABIERTA
                     </button>
@@ -1060,7 +1384,7 @@ export default function AdminDashboard() {
                       className={`px-6 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 ${config.store_status === "closed"
                         ? "bg-white text-red-600 shadow-sm"
                         : "text-gray-400 hover:text-gray-600"
-                      }`}
+                        }`}
                     >
                       <Lock size={16} /> CERRADA
                     </button>
@@ -1089,26 +1413,41 @@ export default function AdminDashboard() {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              {/* 2. BANNERS DEL CARRUSEL (MEJORA: REEMPLAZA PORTADA ÚNICA) */}
               <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-gray-100 p-8 transition-all hover:shadow-md">
                 <h3 className="text-lg font-bold text-slate-700 mb-4 flex items-center gap-2">
                   <div className="p-1.5 bg-blue-100 rounded-lg">
                     <ImageIcon size={18} className="text-blue-600" />
                   </div>
-                  Portada Web
+                  Banners del Carrusel
                 </h3>
-                <div className="mb-5 relative group rounded-2xl overflow-hidden shadow-md bg-gray-100 h-48 flex items-center justify-center border-2 border-dashed border-gray-300">
-                  {config.home_banner ? (
-                    <img src={config.home_banner} alt="Banner" className="w-full h-full object-cover" />
-                  ) : (
-                    <span className="text-gray-400 font-medium">Sin imagen</span>
-                  )}
+
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  {Array.isArray(config.banners) && config.banners.map((banner, index) => (
+                    <div key={index} className="relative group rounded-xl overflow-hidden shadow-sm border border-gray-200 aspect-video">
+                      <img src={banner} alt={`Banner ${index}`} className="w-full h-full object-cover" />
+                      <button
+                        onClick={() => handleRemoveBanner(index)}
+                        className="absolute top-2 right-2 bg-red-500 text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
+                        title="Eliminar Banner"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+
+                  <label className="cursor-pointer bg-gray-50 hover:bg-gray-100 border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center gap-2 aspect-video transition-colors group">
+                    <div className="p-3 bg-white rounded-full shadow-sm group-hover:scale-110 transition-transform">
+                      <Upload size={20} className="text-blue-500" />
+                    </div>
+                    <span className="text-xs font-bold text-gray-500">Agregar Banner</span>
+                    <input type="file" hidden accept="image/*" onChange={handleAddBanner} />
+                  </label>
                 </div>
-                <label className="cursor-pointer bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-600 hover:from-blue-100 hover:to-indigo-100 w-full py-3.5 rounded-xl font-semibold flex items-center justify-center gap-2 transition-all border border-blue-200">
-                  <Upload size={18} /> Subir Nueva Imagen
-                  <input type="file" hidden accept="image/*" onChange={handleUpdateBanner} />
-                </label>
+                <p className="text-[10px] text-gray-400 text-center">Recomendado: Imágenes horizontales (16:9). Se mostrarán rotando en el inicio.</p>
               </div>
 
+              {/* 3. BARRA DE ANUNCIOS */}
               <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-gray-100 p-8 transition-all hover:shadow-md">
                 <h3 className="text-lg font-bold text-slate-700 mb-4 flex items-center gap-2">
                   <div className="p-1.5 bg-pink-100 rounded-lg">
@@ -1149,6 +1488,67 @@ export default function AdminDashboard() {
               </div>
             </div>
 
+            {/* 4. TARIFAS DE ENVÍO POR ZONA (MEJORA: NUEVA SECCIÓN) */}
+            <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-gray-100 p-8 transition-all hover:shadow-md">
+              <h3 className="text-lg font-bold text-slate-700 mb-4 flex items-center gap-2">
+                <div className="p-1.5 bg-green-100 rounded-lg">
+                  <Truck size={18} className="text-green-600" />
+                </div>
+                Tarifas de Envío por Zona
+              </h3>
+
+              <div className="flex flex-col md:flex-row gap-4 items-end mb-6 bg-gray-50/80 p-4 rounded-2xl border border-gray-200">
+                <div className="flex-1 w-full">
+                  <label className="text-xs font-bold text-gray-500 uppercase">Nombre Zona</label>
+                  <input
+                    placeholder="Ej: Centro, Barrios Lejanos..."
+                    className="w-full p-3 bg-white border border-gray-200 rounded-xl mt-1 focus:ring-2 focus:ring-green-500/30 focus:border-green-500 outline-none"
+                    value={newZone.name}
+                    onChange={e => setNewZone({ ...newZone, name: e.target.value })}
+                  />
+                </div>
+                <div className="w-full md:w-32">
+                  <label className="text-xs font-bold text-gray-500 uppercase">Precio (R$)</label>
+                  <input
+                    type="number"
+                    placeholder="5.00"
+                    className="w-full p-3 bg-white border border-gray-200 rounded-xl mt-1 focus:ring-2 focus:ring-green-500/30 focus:border-green-500 outline-none"
+                    value={newZone.price}
+                    onChange={e => setNewZone({ ...newZone, price: e.target.value })}
+                  />
+                </div>
+                <button
+                  onClick={handleAddZone}
+                  className="bg-slate-800 text-white p-3.5 rounded-xl hover:bg-slate-700 transition-colors shadow-md"
+                >
+                  <Plus size={20} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {Array.isArray(config.shipping_zones) && config.shipping_zones.map((zone, idx) => (
+                  <div key={idx} className="flex justify-between items-center p-4 bg-white border border-gray-100 rounded-xl shadow-sm">
+                    <span className="font-medium text-slate-700">{zone.name}</span>
+                    <div className="flex items-center gap-4">
+                      <span className="font-bold text-green-600 bg-green-50 px-2 py-1 rounded-lg">R$ {Number(zone.price).toFixed(2)}</span>
+                      <button
+                        onClick={() => handleRemoveZone(idx)}
+                        className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-lg transition-colors"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {(!config.shipping_zones || config.shipping_zones.length === 0) && (
+                  <div className="col-span-full text-center py-6 text-gray-400 italic bg-gray-50 rounded-xl border border-dashed border-gray-200">
+                    No hay zonas configuradas. Se usará la configuración general.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 5. DATOS OPERATIVOS */}
             <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-gray-100 p-8 transition-all hover:shadow-md">
               <h3 className="text-lg font-bold text-slate-700 mb-6 flex items-center gap-2">
                 <div className="p-1.5 bg-emerald-100 rounded-lg">
@@ -1207,6 +1607,84 @@ export default function AdminDashboard() {
                   </div>
                 </div>
               </div>
+            </div>
+
+            {/* 6. GESTIÓN DE CUPONES */}
+            <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-sm border border-gray-100 p-8 transition-all hover:shadow-md">
+              <h3 className="text-lg font-bold text-slate-700 mb-6 flex items-center gap-2">
+                <div className="p-1.5 bg-yellow-100 rounded-lg">
+                  <Tags size={18} className="text-yellow-600" />
+                </div>
+                Cupones de Descuento
+              </h3>
+
+              {/* Formulario Crear */}
+              <div className="flex flex-col md:flex-row gap-4 items-end mb-6 bg-gray-50/80 p-5 rounded-2xl border border-gray-100">
+                <div className="flex-1 w-full">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Código</label>
+                  <input
+                    placeholder="Ej: NAVIDAD10"
+                    className="w-full border border-gray-200 p-3 rounded-xl mt-1.5 bg-white focus:ring-2 focus:ring-yellow-500/30 focus:border-yellow-500 outline-none transition-all uppercase font-bold text-slate-700"
+                    value={newCoupon.code}
+                    onChange={e => setNewCoupon({ ...newCoupon, code: e.target.value })}
+                  />
+                </div>
+                <div className="w-32">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Valor</label>
+                  <input
+                    type="number"
+                    placeholder="10"
+                    className="w-full border border-gray-200 p-3 rounded-xl mt-1.5 bg-white focus:ring-2 focus:ring-yellow-500/30 focus:border-yellow-500 outline-none transition-all"
+                    value={newCoupon.discount}
+                    onChange={e => setNewCoupon({ ...newCoupon, discount: e.target.value })}
+                  />
+                </div>
+                <div className="w-40">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Tipo</label>
+                  <select
+                    className="w-full border border-gray-200 p-3 rounded-xl mt-1.5 bg-white focus:ring-2 focus:ring-yellow-500/30 focus:border-yellow-500 outline-none transition-all"
+                    value={newCoupon.type}
+                    onChange={e => setNewCoupon({ ...newCoupon, type: e.target.value })}
+                  >
+                    <option value="percent">% Porcentaje</option>
+                    <option value="fixed">R$ Fijo</option>
+                  </select>
+                </div>
+                <button
+                  onClick={handleSaveCoupon}
+                  className="bg-slate-800 hover:bg-slate-700 text-white p-3.5 rounded-xl transition-all shadow-md active:scale-95"
+                >
+                  <Plus size={20} />
+                </button>
+              </div>
+
+              {/* Lista de Cupones */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {coupons.map(c => (
+                  <div key={c.id} className="flex justify-between items-center p-4 border border-gray-100 rounded-xl bg-white hover:border-yellow-200 transition-all shadow-sm">
+                    <div>
+                      <span className="font-bold text-slate-800 block text-lg tracking-tight">{c.code}</span>
+                      <span className="text-[10px] uppercase font-bold text-green-700 bg-green-100 px-2 py-1 rounded-md mt-1 inline-block">
+                        {c.type === 'percent' ? `${c.discount}% OFF` : `R$ ${c.discount} OFF`}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => handleDeleteCoupon(c.id)}
+                      className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
+                ))}
+                {coupons.length === 0 && (
+                  <div className="col-span-full text-center py-8 text-gray-400 border-2 border-dashed border-gray-200 rounded-2xl">
+                    <Tags size={32} className="mx-auto mb-2 opacity-20" />
+                    <p className="text-sm font-medium">No hay cupones activos actualmente.</p>
+                  </div>
+                )}
+              </div>
+
+
             </div>
           </div>
         )}
@@ -1307,6 +1785,53 @@ export default function AdminDashboard() {
           onSave={handleSaveCategory}
         />
       )}
+      {globalHistoryOpen && (
+        <GlobalHistoryModal onClose={() => setGlobalHistoryOpen(false)} />
+      )}
+      {expenseModalOpen && (
+        <ExpenseModal 
+          onClose={() => setExpenseModalOpen(false)} 
+          onSave={handleSaveExpense} 
+        />
+      )}
+      {/* --- BARRA DE NAVEGACIÓN MÓVIL (SOLO CELULAR) --- */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-xl border-t border-gray-200 px-6 py-2 flex justify-between items-end z-40 pb-4 shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
+        <MobileNavBtn 
+          icon={<LayoutDashboard size={24} />} 
+          label="Inicio" 
+          active={activeTab === 'dashboard'} 
+          onClick={() => setActiveTab('dashboard')} 
+        />
+        <MobileNavBtn 
+          icon={<ShoppingBag size={24} />} 
+          label="Ventas" 
+          active={activeTab === 'sales'} 
+          onClick={() => setActiveTab('sales')} 
+        />
+        
+        {/* Botón Flotante Central (Venta Rápida) */}
+        <div className="relative -top-5">
+          <button 
+            onClick={() => setPosModalOpen(true)}
+            className="bg-slate-900 text-white p-4 rounded-full shadow-xl shadow-slate-900/40 active:scale-90 transition-transform border-4 border-gray-50"
+          >
+            <Plus size={28} />
+          </button>
+        </div>
+
+        <MobileNavBtn 
+          icon={<Package size={24} />} 
+          label="Stock" 
+          active={activeTab === 'inventory'} 
+          onClick={() => setActiveTab('inventory')} 
+        />
+        <MobileNavBtn 
+          icon={<Settings size={24} />} 
+          label="Config" 
+          active={activeTab === 'config'} 
+          onClick={() => setActiveTab('config')} 
+        />
+      </div>
     </div>
   );
 }
@@ -1395,10 +1920,17 @@ function POSModal({ products, onClose, onSuccess }) {
   const [searchTerm, setSearchTerm] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("efectivo");
   const [loading, setLoading] = useState(false);
+  
+  // ESTADO PARA MÓVIL: Controla qué pantalla vemos ('products' o 'ticket')
+  const [mobileView, setMobileView] = useState("products"); 
+
   const filteredProducts = products.filter((p) =>
     p.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
+  
   const total = cart.reduce((acc, item) => acc + item.price * item.qty, 0);
+  const totalItems = cart.reduce((acc, item) => acc + item.qty, 0);
+
   const addToCart = (product) => {
     if (product.stock <= 0) return toast.error("Sin stock");
     const existing = cart.find((i) => i.id === product.id);
@@ -1408,7 +1940,9 @@ function POSModal({ products, onClose, onSuccess }) {
         cart.map((i) => (i.id === product.id ? { ...i, qty: i.qty + 1 } : i))
       );
     } else setCart([...cart, { ...product, qty: 1 }]);
+    toast.success("Agregado", { duration: 1000, position: 'bottom-center' });
   };
+
   const removeFromCart = (id) => setCart(cart.filter((i) => i.id !== id));
 
   const handleFinalize = async () => {
@@ -1472,137 +2006,204 @@ function POSModal({ products, onClose, onSuccess }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-fade-in">
-      <div className="bg-white/95 backdrop-blur-sm rounded-3xl w-full max-w-6xl h-[85vh] flex overflow-hidden shadow-2xl border border-white/20">
-        <div className="w-2/3 bg-gradient-to-br from-gray-50 to-white p-6 flex flex-col">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-2xl font-bold text-slate-800 flex gap-2 items-center">
-              <div className="p-2 bg-green-100 rounded-xl">
-                <Store className="text-green-600" size={24} />
-              </div>
-              Punto de Venta
-            </h2>
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-0 md:p-4 animate-fade-in">
+      <div className="bg-white md:rounded-3xl w-full max-w-6xl h-full md:h-[85vh] flex flex-col md:flex-row overflow-hidden shadow-2xl relative">
+        
+        {/* --- COLUMNA IZQUIERDA: PRODUCTOS --- */}
+        {/* En móvil: Solo visible si mobileView === 'products' */}
+        <div className={`w-full md:w-2/3 bg-gray-50 flex flex-col h-full ${mobileView === 'products' ? 'flex' : 'hidden md:flex'}`}>
+          
+          {/* Header Productos */}
+          <div className="p-4 md:p-6 bg-white border-b border-gray-200 shadow-sm z-10">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl md:text-2xl font-bold text-slate-800 flex gap-2 items-center">
+                <div className="p-2 bg-green-100 rounded-xl">
+                  <Store className="text-green-600" size={24} />
+                </div>
+                Punto de Venta
+              </h2>
+              {/* Botón Cerrar (Solo visible en Desktop aquí) */}
+              <button onClick={onClose} className="hidden md:block p-2 hover:bg-gray-100 rounded-full">
+                <X size={24} className="text-gray-500" />
+              </button>
+               {/* Botón Cerrar (Móvil) */}
+               <button onClick={onClose} className="md:hidden p-2 bg-gray-100 rounded-full">
+                <X size={20} className="text-gray-600" />
+              </button>
+            </div>
+            
             <div className="relative">
-              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search size={20} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 autoFocus
                 type="text"
                 placeholder="Buscar producto..."
-                className="pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-2xl w-72 shadow-sm outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition-all"
+                className="pl-10 pr-4 py-3 bg-gray-100 border-none rounded-xl w-full outline-none focus:ring-2 focus:ring-blue-500/50 transition-all font-medium"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-4 overflow-y-auto content-start flex-1 pr-2">
-            {filteredProducts.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => addToCart(p)}
-                disabled={p.stock <= 0}
-                className="bg-white p-5 rounded-2xl border border-gray-100 hover:border-blue-500 hover:shadow-md transition-all text-left group disabled:opacity-50 flex flex-col justify-between shadow-sm"
-              >
-                <div>
-                  <div className="flex justify-between items-start mb-3">
-                    <span className="font-semibold text-slate-700 line-clamp-1 text-sm">
+
+          {/* Grid Productos */}
+          <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-24 md:pb-6">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
+              {filteredProducts.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => addToCart(p)}
+                  disabled={p.stock <= 0}
+                  className="bg-white p-3 md:p-4 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md hover:border-blue-500 transition-all text-left flex flex-col justify-between h-full active:scale-95"
+                >
+                  <div className="w-full">
+                    <div className="flex justify-between items-start mb-2">
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${p.stock < 5 ? "bg-red-100 text-red-600" : "bg-green-100 text-green-600"}`}>
+                        {p.stock}
+                      </span>
+                    </div>
+                    {p.image ? (
+                        <img src={p.image} alt={p.name} className="w-full h-20 object-contain mb-2 mix-blend-multiply" />
+                    ) : (
+                        <div className="w-full h-20 bg-gray-50 rounded-lg mb-2 flex items-center justify-center text-gray-300"><Package size={24}/></div>
+                    )}
+                    <span className="font-semibold text-slate-700 text-xs md:text-sm line-clamp-2 leading-tight">
                       {p.name}
                     </span>
-                    <span
-                      className={`text-[10px] font-bold px-2 py-1 rounded-full ${p.stock < 5
-                        ? "bg-red-100 text-red-600"
-                        : "bg-green-100 text-green-600"
-                      }`}
-                    >
-                      {p.stock}
-                    </span>
                   </div>
-                  {p.image && (
-                    <img src={p.image} alt={p.name} className="w-full h-16 object-contain mb-2" />
-                  )}
+                  <div className="text-blue-600 font-bold text-sm md:text-base mt-2">
+                    R$ {p.price.toFixed(2)}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* BOTÓN FLOTANTE MÓVIL (IR AL TICKET) */}
+          <div className="md:hidden absolute bottom-4 left-4 right-4">
+            <button 
+                onClick={() => setMobileView("ticket")}
+                className="w-full bg-slate-900 text-white p-4 rounded-2xl font-bold shadow-xl flex justify-between items-center animate-bounce-in"
+            >
+                <div className="flex items-center gap-2">
+                    <div className="bg-white/20 px-2 py-1 rounded-lg text-xs">{totalItems} ítems</div>
+                    <span>Ver Ticket</span>
                 </div>
-                <div className="text-blue-600 font-bold text-lg mt-2">
-                  R$ {p.price.toFixed(2)}
-                </div>
-              </button>
-            ))}
+                <div className="text-xl">R$ {total.toFixed(2)}</div>
+            </button>
           </div>
         </div>
-        <div className="w-1/3 bg-white p-6 border-l border-gray-200 flex flex-col">
-          <div className="flex justify-between items-center mb-6">
+
+        {/* --- COLUMNA DERECHA: TICKET --- */}
+        {/* En móvil: Solo visible si mobileView === 'ticket' */}
+        <div className={`w-full md:w-1/3 bg-white flex-col h-full border-l border-gray-200 shadow-xl z-20 ${mobileView === 'ticket' ? 'flex fixed inset-0 md:static' : 'hidden md:flex'}`}>
+          
+          {/* Header Ticket */}
+          <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50 md:bg-white">
             <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
-              <ShoppingBag size={18} /> Ticket
+              <ShoppingBag size={20} className="text-blue-600" /> Ticket de Venta
             </h3>
-            <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
+            
+            {/* Botón Volver (Solo Móvil) */}
+            <button onClick={() => setMobileView("products")} className="md:hidden text-sm font-bold text-blue-600 flex items-center gap-1">
+                <ChevronLeft size={16} /> Volver
+            </button>
+
+            {/* Botón Cerrar (Solo Desktop) */}
+            <button onClick={onClose} className="hidden md:block p-2 hover:bg-gray-100 rounded-xl transition-colors text-gray-400 hover:text-red-500">
               <X size={20} />
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto space-y-3 mb-4">
-            {cart.map((item) => (
-              <div
-                key={item.id}
-                className="flex justify-between items-center bg-gray-50 p-3 rounded-xl border border-gray-100"
-              >
-                <div>
-                  <p className="font-semibold text-sm text-slate-700">
-                    {item.name}
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    {item.qty} x R$ {item.price.toFixed(2)}
-                  </p>
+
+          {/* Lista Items */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-white">
+            {cart.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-gray-300 space-y-4">
+                    <ShoppingBag size={64} className="opacity-20" />
+                    <p className="text-sm font-medium">Carrito vacío</p>
+                    <button onClick={() => setMobileView("products")} className="md:hidden text-blue-500 text-sm font-bold">Agregar productos</button>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="font-bold text-slate-800">
-                    R$ {(item.qty * item.price).toFixed(2)}
-                  </span>
-                  <button
-                    onClick={() => removeFromCart(item.id)}
-                    className="text-red-400 hover:text-red-600 p-1"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+            ) : (
+                cart.map((item) => (
+                <div
+                    key={item.id}
+                    className="flex justify-between items-center bg-white p-2 border-b border-gray-50 last:border-0"
+                >
+                    <div className="flex items-center gap-3">
+                        <div className="bg-blue-50 text-blue-700 font-bold w-8 h-8 flex items-center justify-center rounded-lg text-xs">
+                            x{item.qty}
+                        </div>
+                        <div>
+                            <p className="font-bold text-sm text-slate-700 line-clamp-1">{item.name}</p>
+                            <p className="text-xs text-gray-400">Unit: R$ {item.price.toFixed(2)}</p>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <span className="font-bold text-slate-800 text-sm">
+                            R$ {(item.qty * item.price).toFixed(2)}
+                        </span>
+                        <button
+                            onClick={() => removeFromCart(item.id)}
+                            className="text-gray-300 hover:text-red-500 p-2 rounded-lg transition-colors"
+                        >
+                            <Trash2 size={18} />
+                        </button>
+                    </div>
                 </div>
-              </div>
-            ))}
-            {cart.length === 0 && (
-              <div className="text-center py-8 text-gray-400">
-                <ShoppingBag size={32} className="mx-auto mb-2 opacity-20" />
-                <p className="text-sm">Carrito vacío</p>
-              </div>
+                ))
             )}
           </div>
-          <div className="border-t border-dashed border-gray-300 pt-4 space-y-4">
-            <div className="grid grid-cols-3 gap-2">
+
+          {/* Footer Cobro */}
+          <div className="p-5 border-t border-gray-100 bg-gray-50 md:bg-white pb-safe">
+            <div className="grid grid-cols-3 gap-2 mb-4">
               {["efectivo", "pix", "tarjeta"].map((m) => (
                 <button
                   key={m}
                   onClick={() => setPaymentMethod(m)}
-                  className={`py-2.5 rounded-xl text-xs font-bold uppercase border transition-all ${paymentMethod === m
-                    ? "bg-slate-800 text-white border-slate-800 shadow-md"
-                    : "border-gray-200 text-gray-500 hover:bg-gray-50"
-                  }`}
+                  className={`py-3 rounded-xl text-[10px] md:text-xs font-bold uppercase border transition-all flex flex-col items-center justify-center gap-1 ${paymentMethod === m
+                    ? "bg-slate-800 text-white border-slate-800 shadow-lg transform scale-105"
+                    : "bg-white border-gray-200 text-gray-500 hover:bg-gray-100"
+                    }`}
                 >
+                  {m === 'efectivo' && <DollarSign size={14}/>}
+                  {m === 'tarjeta' && <CreditCard size={14}/>}
+                  {m === 'pix' && <ZapIcon size={14}/>} 
                   {m}
                 </button>
               ))}
             </div>
-            <div className="flex justify-between items-end">
-              <span className="text-gray-500 font-semibold">Total</span>
-              <span className="text-4xl font-black text-slate-900 tracking-tight">
-                R$ {total.toFixed(2)}
+            
+            <div className="flex justify-between items-end mb-4">
+              <span className="text-gray-500 font-semibold text-sm">Total a cobrar</span>
+              <span className="text-4xl font-black text-slate-900 tracking-tighter">
+                <span className="text-lg text-gray-400 font-normal mr-1">R$</span>
+                {total.toFixed(2)}
               </span>
             </div>
+
             <button
               onClick={handleFinalize}
               disabled={loading || cart.length === 0}
-              className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white py-4 rounded-xl font-bold text-xl shadow-lg disabled:opacity-50 transition-all active:scale-95"
+              className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white py-4 rounded-2xl font-bold text-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95 flex items-center justify-center gap-2"
             >
-              {loading ? "Procesando..." : "COBRAR"}
+              {loading ? (
+                <>Procesando...</> 
+              ) : (
+                <>
+                    <CheckCircle size={24} /> COBRAR
+                </>
+              )}
             </button>
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+// Icono auxiliar para Pix (si no tienes Lucide Zap, usa CreditCard o similar)
+function ZapIcon({size}) {
+    return <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
 }
 
 function OrderDetailsModal({ order, onClose, onUpdate, onDelete }) {
@@ -1700,10 +2301,10 @@ function OrderDetailsModal({ order, onClose, onUpdate, onDelete }) {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <button
-              onClick={() => generateOrderReceipt(order)}
+              onClick={() => printOrderTicket(order)}
               className="flex items-center justify-center gap-2 py-3 border-2 border-slate-200 rounded-xl font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
             >
-              🖨️ Imprimir
+              <Printer size={20} /> Imprimir Ticket
             </button>
             <button
               onClick={sendWhatsAppUpdate}
@@ -1724,7 +2325,7 @@ function OrderDetailsModal({ order, onClose, onUpdate, onDelete }) {
                       ? "bg-red-100 border-red-500 text-red-700"
                       : "bg-blue-100 border-blue-500 text-blue-700"
                     : "border-gray-100 text-gray-400 hover:border-gray-300"
-                  }`}
+                    }`}
                 >
                   {s}
                 </button>
@@ -1830,7 +2431,7 @@ function ClientHistoryModal({ client, onClose }) {
                     className={`font-mono font-bold ${order.status === "cancelado"
                       ? "text-gray-400 line-through"
                       : "text-slate-900"
-                    }`}
+                      }`}
                   >
                     R$ {Number(order.total).toFixed(2)}
                   </span>
@@ -1845,15 +2446,14 @@ function ClientHistoryModal({ client, onClose }) {
 
 function ProductFormModal({ product, categories, onClose, onSave }) {
   const [formData, setFormData] = useState({
-    name: "",
-    price: "",
-    cost_price: "",
-    stock: "",
-    category: "",
-    description: "",
-    image: "",
-    badge_text: "",
-    badge_color: "",
+    name: product?.name || "",
+    description: product?.description || "",
+    price: product?.price || "",
+    originalPrice: product?.originalPrice || "",
+    category: product?.category || "",
+    image: product?.image || "",
+    isFeatured: product?.isFeatured || false,
+    active: product?.active !== undefined ? product.active : true,
   });
   const [uploading, setUploading] = useState(false);
 
@@ -2087,7 +2687,7 @@ function ProductHistoryModal({ product, onClose }) {
                           {new Date(log.date).toLocaleDateString()} {new Date(log.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                         <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase ${log.type === 'creacion' ? 'bg-blue-100 text-blue-700' :
-                            log.type === 'venta' ? 'bg-purple-100 text-purple-700' : 'bg-yellow-100 text-yellow-700'
+                          log.type === 'venta' ? 'bg-purple-100 text-purple-700' : 'bg-yellow-100 text-yellow-700'
                           }`}>
                           {log.type.replace('_', ' ')}
                         </span>
@@ -2166,5 +2766,136 @@ function CategoryFormModal({ onClose, onSave }) {
         </form>
       </div>
     </div>
+  );
+}
+
+function GlobalHistoryModal({ onClose }) {
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchLogs = async () => {
+      try {
+        // Traemos los últimos 50 registros
+        const q = query(collection(db, "activity_logs"), orderBy("timestamp", "desc"), limit(50));
+        const querySnapshot = await getDocs(q);
+        setLogs(querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      } catch (error) {
+        console.error(error);
+        toast.error("Error cargando logs");
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchLogs();
+  }, []);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-md z-50 flex items-center justify-center p-4">
+      <div className="bg-white/95 backdrop-blur-sm rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden max-h-[80vh] flex flex-col border border-white/20">
+        <div className="p-6 bg-slate-900 text-white flex justify-between items-center">
+          <h2 className="text-xl font-bold flex items-center gap-2">
+            <History size={20} /> Registro de Actividad (Audit Log)
+          </h2>
+          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-xl"><X size={20} /></button>
+        </div>
+
+        <div className="p-6 flex-1 overflow-y-auto bg-gray-50">
+          {loading ? <p className="text-center py-10">Cargando...</p> : (
+            <div className="space-y-3">
+              {logs.map(log => (
+                <div key={log.id} className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm flex justify-between items-start">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-bold text-slate-800 text-sm">{log.action}</span>
+                      <span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded-full text-slate-500">{log.user}</span>
+                    </div>
+                    <p className="text-xs text-gray-600">{log.details}</p>
+                  </div>
+                  <span className="text-[10px] text-gray-400 font-mono whitespace-nowrap ml-4">
+                    {new Date(log.timestamp).toLocaleString()}
+                  </span>
+                </div>
+              ))}
+              {logs.length === 0 && <p className="text-center text-gray-400">No hay actividad registrada.</p>}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- COMPONENTE MODAL DE GASTOS ---
+function ExpenseModal({ onClose, onSave }) {
+  const [desc, setDesc] = useState("");
+  const [amount, setAmount] = useState("");
+  const [category, setCategory] = useState("operativo");
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!desc || !amount) return;
+    onSave({ 
+      description: desc, 
+      amount: Number(amount), 
+      category, 
+      date: new Date().toISOString() 
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-md z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl p-6 border border-gray-100">
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+            <div className="p-2 bg-red-100 rounded-xl"><DollarSign className="text-red-600" size={20} /></div>
+            Registrar Gasto
+          </h2>
+          <button onClick={onClose}><X size={20} className="text-gray-400 hover:text-gray-600"/></button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="text-xs font-bold text-gray-500 uppercase">Motivo</label>
+            <input autoFocus className="w-full border p-3 rounded-xl mt-1 outline-none focus:border-red-500" placeholder="Ej: Pago de Luz" value={desc} onChange={e => setDesc(e.target.value)} />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-bold text-gray-500 uppercase">Monto (R$)</label>
+              <input type="number" step="0.01" className="w-full border p-3 rounded-xl mt-1 outline-none focus:border-red-500 font-bold text-red-600" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-gray-500 uppercase">Tipo</label>
+              <select className="w-full border p-3 rounded-xl mt-1 bg-white" value={category} onChange={e => setCategory(e.target.value)}>
+                <option value="operativo">Operativo</option>
+                <option value="proveedor">Proveedor</option>
+                <option value="personal">Personal</option>
+                <option value="otros">Otros</option>
+              </select>
+            </div>
+          </div>
+          <button type="submit" className="w-full bg-red-500 hover:bg-red-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-red-500/30 transition-all active:scale-95">
+            Registrar Salida
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function MobileNavBtn({ icon, label, active, onClick }) {
+  return (
+    <button 
+      onClick={onClick} 
+      className={`flex flex-col items-center gap-1 w-14 transition-all duration-300 ${
+        active ? 'text-slate-900 -translate-y-1' : 'text-gray-400'
+      }`}
+    >
+      <div className={`p-1 rounded-xl transition-all ${active ? 'bg-slate-100' : 'bg-transparent'}`}>
+        {icon}
+      </div>
+      <span className={`text-[10px] font-bold ${active ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'}`}>
+        {label}
+      </span>
+    </button>
   );
 }

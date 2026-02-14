@@ -1,9 +1,9 @@
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable"; // <--- IMPORTACIÓN CORREGIDA
+import * as XLSX from "xlsx";
 import { saveAs } from 'file-saver';
-import * as XLSX from 'xlsx';
-import jsPDF from 'jspdf';
-import 'jspdf-autotable';
 
-// --- FUNCIONES EXISTENTES (Excel, CSV, TXT) ---
+// --- 1. EXPORTAR A EXCEL ---
 export const exportToExcel = (data, fileName) => {
   const worksheet = XLSX.utils.json_to_sheet(data);
   const workbook = XLSX.utils.book_new();
@@ -11,6 +11,7 @@ export const exportToExcel = (data, fileName) => {
   XLSX.writeFile(workbook, `${fileName}.xlsx`);
 };
 
+// --- 2. EXPORTAR A CSV ---
 export const exportToCSV = (data, fileName) => {
   const worksheet = XLSX.utils.json_to_sheet(data);
   const csvOutput = XLSX.utils.sheet_to_csv(worksheet);
@@ -18,40 +19,57 @@ export const exportToCSV = (data, fileName) => {
   saveAs(blob, `${fileName}.csv`);
 };
 
+// --- 3. EXPORTAR A TXT ---
 export const exportToTXT = (data, fileName) => {
   const textOutput = JSON.stringify(data, null, 2);
   const blob = new Blob([textOutput], { type: "text/plain;charset=utf-8" });
   saveAs(blob, `${fileName}.txt`);
 };
 
+// --- 4. EXPORTAR A PDF (REPORTE ADMINISTRATIVO) ---
 export const exportToPDF = (title, columns, data, fileName) => {
   const doc = new jsPDF();
-  doc.text(title, 20, 10);
+
+  // Título
+  doc.setFontSize(18);
+  doc.text(title, 14, 22);
   
-  const tableRows = data.map(item => Object.values(item));
-  
-  doc.autoTable({
+  doc.setFontSize(10);
+  doc.setTextColor(100);
+  doc.text(`Generado: ${new Date().toLocaleString()}`, 14, 28);
+
+  // Preparar datos: Convertir objetos a array de arrays
+  // Esto asume que las llaves del objeto coinciden con los nombres de las columnas
+  // O simplemente toma los valores en orden
+  const tableBody = data.map(row => Object.values(row));
+
+  // Generar Tabla usando la función importada (CORRECCIÓN CLAVE)
+  autoTable(doc, {
+    startY: 35,
     head: [columns],
-    body: tableRows,
-    startY: 20,
+    body: tableBody,
+    theme: 'grid',
+    headStyles: { fillColor: [30, 41, 59] }, // Color slate-800
+    styles: { fontSize: 10, cellPadding: 3 },
+    alternateRowStyles: { fillColor: [248, 250, 252] } // Color slate-50
   });
-  
+
   doc.save(`${fileName}.pdf`);
 };
 
-// --- NUEVA FUNCIÓN: IMPRIMIR COMANDA TÉRMICA ---
+// --- 5. IMPRIMIR TICKET TÉRMICO (COMANDA) ---
 export const generateOrderReceipt = (order) => {
-  // Configurado para papel térmico de 80mm (aprox 226px de ancho en PDF units) o A4
+  // Configurado para papel térmico de 80mm
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
-    format: [80, 200] // Ancho 80mm, Alto variable (ajustable)
+    format: [80, 200] // Ancho 80mm, Alto dinámico (se ajusta al contenido visualmente)
   });
 
-  let y = 10; // Cursor vertical
+  let y = 10; // Cursor vertical inicial
 
-  // 1. Encabezado
-  doc.setFontSize(14);
+  // --- Encabezado ---
+  doc.setFontSize(12);
   doc.setFont("helvetica", "bold");
   doc.text("VENEFOODS", 40, y, { align: "center" });
   y += 5;
@@ -63,7 +81,7 @@ export const generateOrderReceipt = (order) => {
   doc.text("------------------------------------------------", 40, y, { align: "center" });
   y += 5;
 
-  // 2. Datos del Pedido
+  // --- Datos del Pedido ---
   doc.setFontSize(9);
   doc.setFont("helvetica", "bold");
   doc.text(`Pedido #${order.id}`, 5, y);
@@ -76,12 +94,15 @@ export const generateOrderReceipt = (order) => {
   y += 4;
   doc.text(`Tel: ${order.customer_phone || 'N/A'}`, 5, y);
   y += 4;
-  doc.text(`Dir: ${order.address || 'Retiro en tienda'}`, 5, y);
-  y += 5;
+  // Ajuste texto largo dirección
+  const addressLines = doc.splitTextToSize(`Dir: ${order.address || 'Retiro en tienda'}`, 70);
+  doc.text(addressLines, 5, y);
+  y += (addressLines.length * 4) + 2;
+  
   doc.text("------------------------------------------------", 40, y, { align: "center" });
   y += 5;
 
-  // 3. Items
+  // --- Items ---
   doc.setFont("helvetica", "bold");
   doc.text("CANT  PRODUCTO", 5, y);
   doc.text("TOTAL", 75, y, { align: "right" });
@@ -102,24 +123,49 @@ export const generateOrderReceipt = (order) => {
   doc.text("------------------------------------------------", 40, y, { align: "center" });
   y += 5;
 
-  // 4. Totales
+  // --- Totales ---
   doc.setFontSize(10);
   doc.setFont("helvetica", "bold");
-  doc.text("TOTAL A PAGAR:", 5, y);
+  
+  // Subtotal, Descuento, Envío (si existen en la orden)
+  if (order.subtotal && order.total !== order.subtotal) {
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "normal");
+      doc.text("Subtotal:", 5, y);
+      doc.text(`R$ ${Number(order.subtotal).toFixed(2)}`, 75, y, { align: "right" });
+      y += 4;
+      
+      if (order.discount > 0) {
+          doc.text("Descuento:", 5, y);
+          doc.text(`- R$ ${Number(order.discount).toFixed(2)}`, 75, y, { align: "right" });
+          y += 4;
+      }
+      
+      if (order.shipping_cost > 0) {
+          doc.text("Envío:", 5, y);
+          doc.text(`+ R$ ${Number(order.shipping_cost).toFixed(2)}`, 75, y, { align: "right" });
+          y += 4;
+      }
+      y += 2;
+  }
+
+  // Total Final
+  doc.setFontSize(12);
+  doc.setFont("helvetica", "bold");
+  doc.text("TOTAL:", 5, y);
   doc.text(`R$ ${Number(order.total).toFixed(2)}`, 75, y, { align: "right" });
-  y += 5;
+  y += 6;
   
   doc.setFontSize(8);
   doc.setFont("helvetica", "normal");
-  doc.text(`Método: ${order.payment_method.toUpperCase()}`, 5, y);
+  doc.text(`Método: ${order.payment_method ? order.payment_method.toUpperCase() : 'N/A'}`, 5, y);
   y += 8;
 
-  // 5. Notas y Pie
+  // --- Notas y Pie ---
   if (order.customer_notes) {
       doc.text("Notas:", 5, y);
       y += 4;
       doc.setFont("helvetica", "italic");
-      // Dividir texto largo
       const splitNotes = doc.splitTextToSize(order.customer_notes, 70);
       doc.text(splitNotes, 5, y);
       y += (splitNotes.length * 4) + 4;
@@ -128,7 +174,7 @@ export const generateOrderReceipt = (order) => {
   doc.setFont("helvetica", "bold");
   doc.text("¡Gracias por tu compra!", 40, y, { align: "center" });
 
-  // Guardar/Abrir
-  doc.autoPrint(); // Intenta abrir diálogo de impresión
+  // Abrir PDF para imprimir
+  doc.autoPrint();
   window.open(doc.output('bloburl'), '_blank');
 };

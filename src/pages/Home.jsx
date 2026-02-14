@@ -2,53 +2,60 @@ import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowUp, Truck, ShieldCheck, Star, Loader2, Search, MessageCircle,
-  ShoppingBasket, ChevronRight, MapPin
+  ShoppingBasket, ChevronRight, MapPin, Plus
 } from "lucide-react";
 import { Helmet } from 'react-helmet-async';
 import Navbar from "../components/Navbar";
-import ProductCard from "../components/ProductCard";
 import CartSummary from "../components/CartSummary";
 import CartModal from "../components/CartModal";
 import Footer from "../components/Footer";
 import StoreClosedBanner from "../components/StoreClosedBanner";
+import ProductDetailModal from '../components/ProductDetailModal'; // Asegúrate de tener este componente o quitar su uso si usas navegación
 
 // --- FIREBASE IMPORTS ---
 import { db } from '../firebase/client';
 import { collection, getDocs } from 'firebase/firestore';
-// ------------------------
-import { useStoreSettings } from "../hooks/useStoreSettings";
 
 export default function Home({
   cart,
   addToCart,
   removeFromCart,
   deleteFromCart,
+  clearCart
 }) {
+  // --- ESTADOS DE DATOS ---
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
+  
+  // --- CONFIGURACIÓN (Con soporte para Array de Banners) ---
+  const [config, setConfig] = useState({
+    banners: [],
+    top_bar_text: "",
+    top_bar_active: "false",
+    store_status: "open",
+    store_closed_message: "",
+    whatsapp_number: "",
+    shipping_min_value: "0"
+  });
+
+  // --- ESTADOS UI ---
   const [activeCategory, setActiveCategory] = useState("todo");
   const [searchTerm, setSearchTerm] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState(null); // Para modal de detalle si se usa
+  
+  // --- ESTADO CARRUSEL ---
+  const [currentBanner, setCurrentBanner] = useState(0);
 
-  const {
-    storeStatus,
-    closedMessage,
-    bannerUrl,
-    topBarActive,
-    topBarText,
-    whatsappNumber,
-    shippingMin
-  } = useStoreSettings();
-
-  // --- CARGA DE DATOS ---
+  // 1. CARGA DE DATOS CENTRALIZADA
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
 
-        // 1. Productos
+        // A. Productos (Mapeando campos nuevos: isFeatured, originalPrice)
         const productsSnap = await getDocs(collection(db, "products"));
         const productsData = productsSnap.docs.map(doc => {
           const d = doc.data();
@@ -56,28 +63,47 @@ export default function Home({
             id: doc.id,
             ...d,
             price: Number(d.price),
+            originalPrice: Number(d.originalPrice || 0),
             stock: Number(d.stock),
+            isFeatured: d.isFeatured || false,
             badge: d.badge ? { text: d.badge.text, color: d.badge.color } : null
           };
         });
         setProducts(productsData);
 
-        // 2. Categorías
+        // B. Categorías
         const catsSnap = await getDocs(collection(db, "categories"));
         const catsData = catsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
         if (catsData.length === 0) {
-          setCategories([
-            { id: 'harinas', name: 'Harinas' },
-            { id: 'quesos', name: 'Quesos' },
-            { id: 'dulces', name: 'Dulces' }
-          ]);
+            // Fallback visual si no hay categorías
+            setCategories([{ id: 'general', name: 'General' }]);
         } else {
-          setCategories(catsData);
+            setCategories(catsData);
         }
 
+        // C. Configuración (Parsing inteligente de Banners)
+        const settingsSnap = await getDocs(collection(db, "site_settings"));
+        const newConfig = {};
+        
+        settingsSnap.docs.forEach(doc => {
+            const val = doc.data().value;
+            // Intentar parsear JSON (para banners y zonas)
+            try {
+                newConfig[doc.id] = JSON.parse(val);
+            } catch {
+                newConfig[doc.id] = val; // Si falla, es un string normal
+            }
+        });
+
+        // Asegurar que banners sea un array
+        if (!Array.isArray(newConfig.banners)) {
+            newConfig.banners = newConfig.home_banner ? [newConfig.home_banner] : [];
+        }
+
+        setConfig(prev => ({ ...prev, ...newConfig }));
+
       } catch (error) {
-        console.error("Error:", error);
+        console.error("Error cargando datos:", error);
       } finally {
         setLoading(false);
       }
@@ -85,7 +111,16 @@ export default function Home({
     fetchData();
   }, []);
 
-  // --- SCROLL ---
+  // 2. ROTACIÓN AUTOMÁTICA DEL CARRUSEL
+  useEffect(() => {
+    if (!config.banners || config.banners.length <= 1) return;
+    const interval = setInterval(() => {
+      setCurrentBanner(prev => (prev + 1) % config.banners.length);
+    }, 4000); // 4 segundos
+    return () => clearInterval(interval);
+  }, [config.banners]);
+
+  // 3. SCROLL TOP
   useEffect(() => {
     const handleScroll = () => { setShowScrollTop(window.scrollY > 400); };
     window.addEventListener("scroll", handleScroll);
@@ -94,21 +129,29 @@ export default function Home({
 
   const scrollToTop = () => { window.scrollTo({ top: 0, behavior: "smooth" }); };
 
-  // --- FILTROS ---
+  // 4. FILTROS Y ORDENAMIENTO
   const filteredProducts = products.filter((product) => {
-    const prodCat = product.category ? product.category.toLowerCase() : '';
-    const activeCat = activeCategory.toLowerCase();
-    const matchesCategory = activeCategory === "todo" || prodCat === activeCat;
+    // Normalizar ID de categoría para comparación
+    const prodCatId = product.category ? product.category : ''; 
+    // Nota: Si guardas el ID de categoría en el producto, usa eso. Si guardas el nombre, ajusta aquí.
+    
+    // Comparación flexible (nombre o id)
+    const matchesCategory = activeCategory === "todo" || prodCatId === activeCategory;
     const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase());
-    return matchesCategory && matchesSearch;
+    return matchesCategory && matchesSearch && product.active !== false;
   });
 
+  // Ordenar: Destacados primero
+  filteredProducts.sort((a, b) => (b.isFeatured ? 1 : 0) - (a.isFeatured ? 1 : 0));
+
+  // Totales Carrito
   const totalItems = cart.reduce((sum, item) => sum + (item.quantity || 1), 0);
   const totalPrice = cart.reduce((sum, item) => sum + (Number(item.price) * (item.quantity || 1)), 0);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 font-sans relative overflow-hidden selection:bg-blue-200">
-      {/* --- FONDO ATMOSFÉRICO ESTILO APPLE (VIDRIO) --- */}
+      
+      {/* --- FONDO ATMOSFÉRICO --- */}
       <div className="fixed inset-0 -z-10 pointer-events-none">
         <div className="absolute top-[-5%] left-[-5%] w-[500px] h-[500px] bg-yellow-400/20 rounded-full blur-[120px] mix-blend-multiply"></div>
         <div className="absolute top-[20%] right-[-10%] w-[450px] h-[450px] bg-blue-400/20 rounded-full blur-[100px] mix-blend-multiply"></div>
@@ -120,36 +163,50 @@ export default function Home({
         <meta name="description" content="Delivery de productos venezolanos en Passo Fundo." />
       </Helmet>
 
-      {/* --- BARRA SUPERIOR CRISTAL (EFECTO VIDRIO) --- */}
-      {topBarActive && topBarText && (
-        <div className="bg-slate-900/80 backdrop-blur-md text-white text-center text-xs font-semibold py-3 px-4 shadow-sm relative z-50 tracking-wide border-b border-white/10">
-          {topBarText} {shippingMin > 0 && <span className="text-yellow-400 ml-1">(Mínimo R$ {shippingMin})</span>}
+      {/* --- BARRA SUPERIOR DE ANUNCIOS --- */}
+      {config.top_bar_active === "true" && config.top_bar_text && (
+        <div className="bg-slate-900/90 backdrop-blur-md text-white text-center text-xs font-bold py-2.5 px-4 shadow-sm relative z-50 tracking-wide border-b border-white/10 animate-fade-in-down">
+          {config.top_bar_text} 
+          {Number(config.shipping_min_value) > 0 && 
+            <span className="text-yellow-400 ml-1">(Envío gratis +R$ {config.shipping_min_value})</span>
+          }
         </div>
       )}
 
       <Navbar cartCount={totalItems} onSearch={setSearchTerm} />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-32 space-y-20 w-full relative z-10">
-        {/* --- HERO SECTION (DISEÑO GLASS PREMIUM) --- */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-32 space-y-16 w-full relative z-10">
+        
+        {/* --- HERO SECTION / CARRUSEL --- */}
         {searchTerm === "" && (
           <div className="space-y-12 animate-fade-in-up">
-            <div className="relative rounded-[2.5rem] overflow-hidden p-8 md:p-16 shadow-2xl shadow-blue-900/20 min-h-[460px] flex items-center">
-              {/* Fondo del Banner */}
-              <div className="absolute inset-0 z-0">
-                {bannerUrl ? (
-                  <img src={bannerUrl} alt="Banner" className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full bg-gradient-to-br from-slate-900 via-blue-900 to-slate-800"></div>
-                )}
-                {/* Overlay degradado elegante */}
-                <div className="absolute inset-0 bg-gradient-to-r from-slate-900/90 via-slate-900/60 to-transparent"></div>
-              </div>
+            
+            {/* COMPONENTE CARRUSEL */}
+            <div className="relative rounded-[2.5rem] overflow-hidden shadow-2xl shadow-blue-900/20 min-h-[460px] flex items-center group">
+              
+              {/* Slides */}
+              {config.banners.length > 0 ? (
+                config.banners.map((banner, index) => (
+                  <div 
+                    key={index}
+                    className={`absolute inset-0 transition-opacity duration-1000 ease-in-out ${index === currentBanner ? 'opacity-100' : 'opacity-0'}`}
+                  >
+                    <img src={banner} alt={`Banner ${index}`} className="w-full h-full object-cover transform scale-105 group-hover:scale-100 transition-transform duration-[2000ms]" />
+                    {/* Overlay degradado para legibilidad */}
+                    <div className="absolute inset-0 bg-gradient-to-r from-slate-900/90 via-slate-900/50 to-transparent"></div>
+                  </div>
+                ))
+              ) : (
+                // Fallback si no hay banners
+                <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-blue-900 to-slate-800"></div>
+              )}
 
-              <div className="relative z-10 max-w-2xl space-y-6">
+              {/* Contenido Hero */}
+              <div className="relative z-10 max-w-2xl space-y-6 p-8 md:p-16">
                 {/* Badge de Estado */}
-                <div className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-full text-xs font-bold uppercase tracking-wider backdrop-blur-md border border-white/20 shadow-lg ${storeStatus === 'open' ? 'bg-white/20 text-white' : 'bg-red-500/80 text-white'}`}>
-                  <div className={`w-2 h-2 rounded-full ${storeStatus === 'open' ? 'bg-green-400 shadow-[0_0_12px_#4ade80]' : 'bg-white'}`}></div>
-                  {storeStatus === 'open' ? 'Tienda Abierta' : 'Cerrado Temporalmente'}
+                <div className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-full text-xs font-bold uppercase tracking-wider backdrop-blur-md border border-white/20 shadow-lg ${config.store_status === 'open' ? 'bg-white/20 text-white' : 'bg-red-500/80 text-white'}`}>
+                  <div className={`w-2 h-2 rounded-full ${config.store_status === 'open' ? 'bg-green-400 shadow-[0_0_12px_#4ade80]' : 'bg-white'}`}></div>
+                  {config.store_status === 'open' ? 'Tienda Abierta' : 'Cerrado Temporalmente'}
                 </div>
 
                 <h2 className="text-5xl md:text-7xl font-black text-white leading-[0.95] tracking-tight drop-shadow-2xl">
@@ -173,9 +230,22 @@ export default function Home({
                   </div>
                 </div>
               </div>
+
+              {/* Indicadores del Carrusel (Puntos) */}
+              {config.banners.length > 1 && (
+                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-2 z-20">
+                  {config.banners.map((_, idx) => (
+                    <button 
+                      key={idx}
+                      onClick={() => setCurrentBanner(idx)}
+                      className={`h-1.5 rounded-full transition-all duration-300 ${idx === currentBanner ? 'bg-white w-8' : 'bg-white/40 w-2 hover:bg-white/70'}`}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
 
-            {/* Tarjetas de Información Flotantes */}
+            {/* Tarjetas Flotantes */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <GlassInfoCard icon={<Truck />} title="Delivery Rápido" desc="Directo a tu puerta" color="text-blue-500" />
               <GlassInfoCard icon={<Star />} title="Calidad Premium" desc="Productos 100% originales" color="text-yellow-500" />
@@ -184,7 +254,7 @@ export default function Home({
           </div>
         )}
 
-        {/* --- CATEGORÍAS (PÍLDORAS ESTILO IOS) --- */}
+        {/* --- CATEGORÍAS --- */}
         <section id="categorias" className="space-y-6">
           <div className="flex items-center justify-between px-1">
             <h3 className="text-2xl md:text-3xl font-bold text-slate-800 tracking-tight">Categorías</h3>
@@ -208,7 +278,7 @@ export default function Home({
           </div>
         </section>
 
-        {/* --- GRID DE PRODUCTOS --- */}
+        {/* --- GRID DE PRODUCTOS (CON OFERTAS Y DESTACADOS) --- */}
         {loading ? (
           <div className="flex flex-col items-center justify-center py-32 text-gray-400">
             <div className="relative">
@@ -217,15 +287,73 @@ export default function Home({
             <p className="font-medium text-lg tracking-wide mt-6 text-slate-500">Cargando catálogo...</p>
           </div>
         ) : filteredProducts.length > 0 ? (
-          <section className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 md:gap-6 ${storeStatus === 'closed' ? 'opacity-60 grayscale pointer-events-none' : ''}`}>
+          <section className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 md:gap-6 ${config.store_status === 'closed' ? 'opacity-60 grayscale pointer-events-none' : ''}`}>
             {filteredProducts.map((product) => (
-              <Link to={`/product/${product.id}`} key={product.id} className="block group">
-                <div className="h-full transition-transform duration-300 group-hover:-translate-y-2">
-                  <ProductCard
-                    product={product}
-                    onAdd={addToCart}
-                    cart={cart}
-                  />
+              <Link to={`/product/${product.id}`} key={product.id} className="block group h-full">
+                <div className={`bg-white p-4 rounded-3xl shadow-sm border transition-all hover:shadow-xl hover:-translate-y-1 h-full flex flex-col relative overflow-hidden ${product.isFeatured ? 'border-yellow-400 ring-2 ring-yellow-100' : 'border-gray-100'}`}>
+                  
+                  {/* --- ETIQUETAS (OFERTA / DESTACADO) --- */}
+                  <div className="absolute top-3 left-3 z-10 flex flex-col gap-1.5">
+                    {/* Destacado */}
+                    {product.isFeatured && (
+                      <span className="bg-yellow-400 text-yellow-900 text-[10px] font-black px-2 py-1 rounded-full shadow-sm flex items-center gap-1">
+                        <Star size={10} fill="currentColor" /> TOP
+                      </span>
+                    )}
+                    {/* Oferta (Calculada) */}
+                    {product.originalPrice > product.price && (
+                      <span className="bg-red-500 text-white text-[10px] font-black px-2 py-1 rounded-full shadow-sm animate-pulse">
+                        -{Math.round(((product.originalPrice - product.price) / product.originalPrice) * 100)}%
+                      </span>
+                    )}
+                  </div>
+
+                  {/* IMAGEN */}
+                  <div className="w-full h-36 md:h-44 bg-gray-50 rounded-2xl p-4 mb-3 flex items-center justify-center relative">
+                    <img 
+                      src={product.image} 
+                      alt={product.name} 
+                      className="w-full h-full object-contain mix-blend-multiply transition-transform duration-300 group-hover:scale-110" 
+                    />
+                  </div>
+
+                  {/* INFO DEL PRODUCTO */}
+                  <div className="flex flex-col flex-1">
+                    <h3 className="font-bold text-slate-800 mb-1 leading-tight text-sm md:text-base line-clamp-2 min-h-[2.5em]">
+                      {product.name}
+                    </h3>
+                    
+                    <div className="mt-auto flex items-end justify-between pt-2">
+                      <div className="flex flex-col">
+                        {/* PRECIO TACHADO (Si existe oferta) */}
+                        {product.originalPrice > product.price && (
+                          <span className="text-[10px] md:text-xs text-gray-400 line-through font-medium">
+                            R$ {Number(product.originalPrice).toFixed(2)}
+                          </span>
+                        )}
+                        {/* PRECIO REAL */}
+                        <span className="text-base md:text-lg font-black text-slate-900">
+                          R$ {Number(product.price).toFixed(2)}
+                        </span>
+                      </div>
+
+                      {/* Botón Añadir Rápido */}
+                      <button 
+                        onClick={(e) => {
+                          e.preventDefault(); // Evitar navegación del Link
+                          addToCart(product);
+                        }}
+                        disabled={config.store_status === 'closed' || product.stock <= 0}
+                        className={`w-9 h-9 md:w-10 md:h-10 rounded-xl flex items-center justify-center shadow-lg transition-all active:scale-90 z-20 ${
+                          config.store_status === 'closed' || product.stock <= 0
+                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                          : 'bg-slate-900 text-white hover:bg-slate-800'
+                        }`}
+                      >
+                        <Plus size={18} />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </Link>
             ))}
@@ -249,11 +377,11 @@ export default function Home({
 
       <Footer />
 
-      {/* --- BOTONES FLOTANTES (ESTILO IOS CONTROL CENTER) --- */}
+      {/* --- BOTONES FLOTANTES --- */}
       <div className="fixed bottom-8 right-6 z-40 flex flex-col gap-4">
-        {whatsappNumber && (
+        {config.whatsapp_number && (
           <a
-            href={`https://wa.me/${whatsappNumber.replace(/\D/g, '')}`}
+            href={`https://wa.me/${config.whatsapp_number.replace(/\D/g, '')}`}
             target="_blank"
             rel="noopener noreferrer"
             className="group relative flex items-center justify-center w-14 h-14 bg-[#25D366] text-white rounded-2xl shadow-xl shadow-green-500/30 hover:scale-110 hover:shadow-2xl transition-all duration-300"
@@ -276,16 +404,16 @@ export default function Home({
       </div>
 
       {/* Resumen del Carrito */}
-      {storeStatus === 'open' && (
+      {config.store_status === 'open' && (
         <CartSummary
           count={totalItems}
           total={totalPrice}
-          shippingMin={shippingMin}
+          shippingMin={config.shipping_min_value}
           onClick={() => setIsModalOpen(true)}
         />
       )}
 
-      {storeStatus === 'closed' && <StoreClosedBanner message={closedMessage} />}
+      {config.store_status === 'closed' && <StoreClosedBanner message={config.store_closed_message} />}
 
       <CartModal
         cart={cart}
@@ -294,14 +422,25 @@ export default function Home({
         onAdd={addToCart}
         onRemove={removeFromCart}
         onDelete={deleteFromCart}
-        storeStatus={storeStatus}
-        shippingMin={shippingMin}
+        clearCart={clearCart}
+        storeStatus={config.store_status}
+        shippingMin={config.shipping_min_value}
       />
+      
+      {/* Modal Detalle (Opcional, si no usas Link) */}
+      {selectedProduct && (
+        <ProductDetailModal 
+          product={selectedProduct} 
+          isOpen={!!selectedProduct} 
+          onClose={() => setSelectedProduct(null)} 
+          onAddToCart={addToCart}
+        />
+      )}
     </div>
   );
 }
 
-// --- COMPONENTES UI PERSONALIZADOS MEJORADOS ---
+// --- SUBCOMPONENTES ---
 
 function GlassInfoCard({ icon, title, desc, color }) {
   return (
